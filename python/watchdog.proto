@@ -1,0 +1,159 @@
+syntax = "proto3";
+
+package artisan.watchdog;
+
+message Empty {}
+
+message StdLogEntry {
+  uint64 timestamp = 1;
+  string line = 2;
+}
+
+message ApplicationStatusMessage {
+  string name = 1;
+  string status = 2;
+  float cpu_usage = 3;
+  double memory_usage = 4;
+  optional uint32 pid = 5;
+  uint64 last_updated = 6;
+  repeated StdLogEntry stdout = 7;
+  repeated StdLogEntry stderr = 8;
+}
+
+message ApplicationStatusRequest {
+  string name = 1;
+}
+
+message ApplicationStatusResponse {
+  bool found = 1;
+  ApplicationStatusMessage status = 2;
+}
+
+message ApplicationStatusList {
+  repeated ApplicationStatusMessage applications = 1;
+}
+
+enum BuildResult {
+  BUILD_RESULT_UNSPECIFIED = 0;
+  BUILD_RESULT_SUCCESS = 1;
+  BUILD_RESULT_FAILURE = 2;
+}
+
+message BuildStatusMessage {
+  string name = 1;
+  BuildResult result = 2;
+  uint64 timestamp = 3;
+  bool vetted = 4;
+}
+
+message BuildStatusList {
+  repeated BuildStatusMessage builds = 1;
+}
+
+message VerificationEntryMessage {
+  string name = 1;
+  string path = 2;
+  string expected_hash = 3;
+  string calculated_hash = 4;
+  bool verified = 5;
+  uint64 timestamp = 6;
+}
+
+message VerificationEntryList {
+  repeated VerificationEntryMessage entries = 1;
+}
+
+message SystemInfo {
+  string identity = 1;
+  bool system_apps_initialized = 2;
+  repeated string ip_addresses = 3;
+  bool manager_linked = 4;
+}
+
+enum GetConfigField {
+  GET_CONFIG_FIELD_UNSPECIFIED = 0;
+  GET_CONFIG_FIELD_BUILD_COMMAND = 1;
+  GET_CONFIG_FIELD_RUN_COMMAND = 2;
+  GET_CONFIG_FIELD_DEPENDENCIES_COMMAND = 3;
+  GET_CONFIG_FIELD_LOG_LEVEL = 4;
+  GET_CONFIG_FIELD_MEMORY_CAP = 5;
+  GET_CONFIG_FIELD_CPU_CAP = 6;
+  GET_CONFIG_FIELD_MONITOR_DIRECTORY = 7;
+  GET_CONFIG_FIELD_WORKING_DIRECTORY = 8;
+  GET_CONFIG_FIELD_CHANGES_NEEDED = 9;
+  GET_CONFIG_FIELD_DIR_SCAN_INTERVAL = 10;
+}
+
+message SetConfigValue {
+  oneof value {
+    string build_command = 1;
+    string run_command = 2;
+    string dependencies_command = 3;
+    string log_level = 4;
+    uint32 memory_cap = 5;
+    uint32 cpu_cap = 6;
+    string monitor_directory = 7;
+    string working_directory = 8;
+    uint32 changes_needed = 9;
+    uint32 dir_scan_interval = 10;
+  }
+}
+
+message StartCommand {
+  string application = 1;
+}
+
+message StopCommand {
+  string application = 1;
+}
+
+message ReloadCommand {
+  string application = 1;
+}
+
+message RebuildCommand {
+  string application = 1;
+}
+
+message StatusCommand {
+  string application = 1;
+}
+
+message InfoCommand {}
+
+message SetCommand {
+  string application = 1;
+  SetConfigValue value = 2;
+}
+
+message GetCommand {
+  string application = 1;
+  GetConfigField field = 2;
+}
+
+message CommandRequest {
+  oneof payload {
+    StartCommand start = 1;
+    StopCommand stop = 2;
+    ReloadCommand reload = 3;
+    RebuildCommand rebuild = 4;
+    StatusCommand status = 5;
+    InfoCommand info = 6;
+    SetCommand set = 7;
+    GetCommand get = 8;
+  }
+}
+
+message CommandResponse {
+  bool accepted = 1;
+  string message = 2;
+}
+
+service Watchdog {
+  rpc ListApplications(Empty) returns (ApplicationStatusList);
+  rpc GetApplication(ApplicationStatusRequest) returns (ApplicationStatusResponse);
+  rpc ListBuilds(Empty) returns (BuildStatusList);
+  rpc ListVerifications(Empty) returns (VerificationEntryList);
+  rpc GetSystemInfo(Empty) returns (SystemInfo);
+  rpc ExecuteCommand(CommandRequest) returns (CommandResponse);
+}
