@@ -39,15 +39,6 @@ async fn main() -> Result<(), ErrorArrayItem> {
     // controls applications. start / stop / reload
     // status, can return it's building / running
 
-    // // Validatation step ensure the following files exists
-    // // /opt/artisan/identity /opt/artisan/ledger.json /opt/artisan/git.cf
-
-    // // Validate the artisan library and the source code for all the applications are present
-    // // /opt/artisan/apps/ais_gitmon /opt/artisan/apps/ais_manager /opt/artisan/apps/ais_runner /opt/artisan/apps/ais_welcome
-
-    // // Validate the scripts are there and the match the checksums we created
-    // // /opt/artisan/scripts/build_runner.sh /opt/artisan/scripts/build.sh
-
     let system_application_status_store = defs::new_system_application_status_store();
     let client_application_status_store = defs::new_client_application_status_store();
     let build_status_store = defs::new_build_status_store();
@@ -389,22 +380,6 @@ async fn main() -> Result<(), ErrorArrayItem> {
     }
 
     loop {}
-    // // Start building for essentials systems
-    // // ais_manager, ais_gitmon, ais_mailler?
-
-    // // Start manager in it's own process group
-    // // check the status file to ensure we spawned
-
-    // // Start gitmon in it's own process group
-    // // check the status file to ensure we spawned
-
-    // // Start mailler in it's own process group
-    // // check the status file to ensure it spawned
-
     // create threads to parse the statefiles on occasion
     // watching for and storing warning / errors and catching crashes
-
-    // // run cargo clean in all of the system directories
-
-    // // Start spawning and monitoring client applications,
 }

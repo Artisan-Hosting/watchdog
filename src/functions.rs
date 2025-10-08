@@ -7,7 +7,12 @@ use artisan_middleware::{
     state_persistence::{AppState, StatePersistence},
 };
 use get_if_addrs::{IfAddr, get_if_addrs};
-use std::{collections::HashMap, fs, io, net::Ipv4Addr, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    fs, io,
+    net::Ipv4Addr,
+    time::Duration,
+};
 use tokio::time;
 
 use crate::{
@@ -218,49 +223,10 @@ async fn refresh_system_statuses_once(
 ) -> Result<(), ErrorArrayItem> {
     for app in definitions::CRITICAL_APPLICATIONS.iter() {
         let state = load_state_snapshot(app).await;
-        let observations = collect_process_observations(process_store, app).await?;
+        let observations = collect_process_observations(process_store, app.ais).await?;
 
-        let (status_value, last_updated, pid_from_state, stdout_from_state, stderr_from_state) =
-            match state {
-                Some(ref state) => (
-                    state.status.clone(),
-                    state.last_updated,
-                    Some(state.pid),
-                    state.stdout.clone(),
-                    state.stderr.clone(),
-                ),
-                None => (
-                    artisan_middleware::aggregator::Status::Unknown,
-                    current_timestamp_wrapper(),
-                    None,
-                    Vec::new(),
-                    Vec::new(),
-                ),
-            };
-
-        let metrics = observations.metrics;
-        let cpu_usage: f32 = metrics.as_ref().map(|m| m.cpu_usage).unwrap_or_default();
-        let memory_usage: f64 = metrics.as_ref().map(|m| m.memory_usage).unwrap_or_default();
-        let network_usage = metrics.as_ref().and_then(|m| m.other.clone());
-
-        let pid = observations.pid.or(pid_from_state);
-
-        let stdout_entries = observations.stdout.unwrap_or(stdout_from_state);
-        let stderr_entries = observations.stderr.unwrap_or(stderr_from_state);
-
-        let stdout_buffer = definitions::rolling_buffer_from_entries(stdout_entries);
-        let stderr_buffer = definitions::rolling_buffer_from_entries(stderr_entries);
-
-        let app_status = ApplicationStatus::new(
-            status_value,
-            cpu_usage,
-            memory_usage,
-            pid,
-            last_updated,
-            stdout_buffer,
-            stderr_buffer,
-            network_usage,
-        );
+        let app_status = merge_state_and_observations(state, observations, true)
+            .expect("system applications should always produce a status");
 
         let mut store = status_store.write().await;
         store.insert(app.ais.to_string(), app_status);
@@ -275,6 +241,7 @@ async fn refresh_client_statuses_once(
 ) -> Result<(), ErrorArrayItem> {
     let processes = process_store.try_read().await?;
     let mut new_statuses: HashMap<String, ApplicationStatus> = HashMap::new();
+    let mut known_names: HashSet<String> = HashSet::new();
 
     for (name, process) in processes.iter() {
         if definitions::CRITICAL_APPLICATIONS
@@ -284,12 +251,54 @@ async fn refresh_client_statuses_once(
             continue;
         }
 
-        if let Some(status) = build_status_from_process(process).await? {
+        known_names.insert(name.clone());
+
+        let state = load_state_snapshot_by_name(name).await;
+        let observations = observe_supervised_process(process).await?;
+
+        if let Some(status) = merge_state_and_observations(state, observations, false) {
             new_statuses.insert(name.clone(), status);
         }
     }
 
     drop(processes);
+
+    if let Ok(dir) = fs::read_dir("/tmp") {
+        for entry in dir.flatten() {
+            if let Some(file_name) = entry.file_name().to_str() {
+                if !file_name.starts_with('.') || !file_name.ends_with(".state") {
+                    continue;
+                }
+
+                let ais_name = &file_name[1..file_name.len() - 6];
+
+                if definitions::CRITICAL_APPLICATIONS
+                    .iter()
+                    .any(|system_app| system_app.ais == ais_name)
+                {
+                    continue;
+                }
+
+                if known_names.contains(ais_name) {
+                    continue;
+                }
+
+                if let Some(state) = load_state_snapshot_by_name(ais_name).await {
+                    if state.system_application {
+                        continue;
+                    }
+
+                    if let Some(status) = merge_state_and_observations(
+                        Some(state),
+                        ProcessObservations::default(),
+                        false,
+                    ) {
+                        new_statuses.insert(ais_name.to_string(), status);
+                    }
+                }
+            }
+        }
+    }
 
     let mut store = client_store.write().await;
     *store = new_statuses;
@@ -298,14 +307,18 @@ async fn refresh_client_statuses_once(
 }
 
 async fn load_state_snapshot(app: &ApplicationIdentifiers) -> Option<AppState> {
-    let path = state_file_path(app.ais);
+    load_state_snapshot_by_name(app.ais).await
+}
+
+async fn load_state_snapshot_by_name(name: &str) -> Option<AppState> {
+    let path = state_file_path(name);
     match StatePersistence::load_state(&path).await {
         Ok(state) => Some(state),
         Err(err) => {
             log!(
                 LogLevel::Trace,
                 "Unable to load state for {}: {}",
-                app.ais,
+                name,
                 err
             );
             None
@@ -315,69 +328,21 @@ async fn load_state_snapshot(app: &ApplicationIdentifiers) -> Option<AppState> {
 
 async fn collect_process_observations(
     process_store: &definitions::ChildProcessArray,
-    app: &ApplicationIdentifiers,
+    name: &str,
 ) -> Result<ProcessObservations, ErrorArrayItem> {
     let processes = process_store.try_read().await?;
-    let mut observations = ProcessObservations::default();
-
-    if let Some(process) = processes.get(app.ais) {
-        match process {
-            definitions::SupervisedProcesses::Child(child) => {
-                if let Ok(metrics) = child.get_metrics().await {
-                    observations.metrics = Some(metrics);
-                }
-                if let Ok(stdout) = child.get_std_out().await {
-                    observations.stdout = Some(stdout);
-                }
-                if let Ok(stderr) = child.get_std_err().await {
-                    observations.stderr = Some(stderr);
-                }
-                if let Ok(pid) = child.get_pid().await {
-                    observations.pid = Some(pid);
-                }
-            }
-            definitions::SupervisedProcesses::Process(proc) => {
-                if let Ok(metrics) = proc.get_metrics().await {
-                    observations.metrics = Some(metrics);
-                }
-                observations.pid = Some(proc.get_pid() as u32);
-            }
-        }
-    }
-
-    if let Some(pid) = observations.pid {
-        match ebpf::usage_for_pid(pid) {
-            Ok(Some(usage)) => {
-                if let Some(metrics) = observations.metrics.as_mut() {
-                    metrics.other = Some(usage);
-                } else {
-                    observations.metrics = Some(artisan_middleware::aggregator::Metrics {
-                        cpu_usage: 0.0,
-                        memory_usage: 0.0,
-                        other: Some(usage),
-                    });
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                log!(
-                    LogLevel::Trace,
-                    "Failed to read eBPF usage for PID {}: {}",
-                    pid,
-                    err.err_mesg
-                );
-            }
-        }
-    }
+    let observations = if let Some(process) = processes.get(name) {
+        observe_supervised_process(process).await?
+    } else {
+        ProcessObservations::default()
+    };
 
     Ok(observations)
 }
 
-/// Creates an `ApplicationStatus` snapshot for a non-critical process purely
-/// from the live `SupervisedProcess`/`SupervisedChild` handle.
-async fn build_status_from_process(
+async fn observe_supervised_process(
     process: &definitions::SupervisedProcesses,
-) -> Result<Option<ApplicationStatus>, ErrorArrayItem> {
+) -> Result<ProcessObservations, ErrorArrayItem> {
     let mut observations = ProcessObservations::default();
 
     match process {
@@ -428,36 +393,69 @@ async fn build_status_from_process(
         }
     }
 
-    if observations.metrics.is_none()
-        && observations.stdout.is_none()
-        && observations.stderr.is_none()
-        && observations.pid.is_none()
-    {
-        return Ok(None);
-    }
+    Ok(observations)
+}
+
+fn merge_state_and_observations(
+    state: Option<AppState>,
+    observations: ProcessObservations,
+    allow_empty: bool,
+) -> Option<ApplicationStatus> {
+    let has_state = state.is_some();
+
+    let (status_value, last_updated, pid_from_state, stdout_from_state, stderr_from_state) =
+        match state {
+            Some(ref state) => (
+                state.status.clone(),
+                state.last_updated,
+                Some(state.pid),
+                state.stdout.clone(),
+                state.stderr.clone(),
+            ),
+            None => (
+                artisan_middleware::aggregator::Status::Unknown,
+                current_timestamp_wrapper(),
+                None,
+                Vec::new(),
+                Vec::new(),
+            ),
+        };
 
     let metrics = observations.metrics;
+    let stdout_obs = observations.stdout;
+    let stderr_obs = observations.stderr;
+    let pid_obs = observations.pid;
+
+    let has_observation = metrics.is_some()
+        || pid_obs.is_some()
+        || stdout_obs.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+        || stderr_obs.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+
+    if !allow_empty && !has_state && !has_observation {
+        return None;
+    }
+
     let cpu_usage: f32 = metrics.as_ref().map(|m| m.cpu_usage).unwrap_or_default();
     let memory_usage: f64 = metrics.as_ref().map(|m| m.memory_usage).unwrap_or_default();
     let network_usage = metrics.as_ref().and_then(|m| m.other.clone());
 
-    let stdout_buffer =
-        definitions::rolling_buffer_from_entries(observations.stdout.unwrap_or_default());
-    let stderr_buffer =
-        definitions::rolling_buffer_from_entries(observations.stderr.unwrap_or_default());
+    let pid = pid_obs.or(pid_from_state);
+    let stdout_entries = stdout_obs.unwrap_or(stdout_from_state);
+    let stderr_entries = stderr_obs.unwrap_or(stderr_from_state);
 
-    let status = ApplicationStatus::new(
-        artisan_middleware::aggregator::Status::Unknown,
+    let stdout_buffer = definitions::rolling_buffer_from_entries(stdout_entries);
+    let stderr_buffer = definitions::rolling_buffer_from_entries(stderr_entries);
+
+    Some(ApplicationStatus::new(
+        status_value,
         cpu_usage,
         memory_usage,
-        observations.pid,
-        current_timestamp_wrapper(),
+        pid,
+        last_updated,
         stdout_buffer,
         stderr_buffer,
         network_usage,
-    );
-
-    Ok(Some(status))
+    ))
 }
 
 /// Collects all IPv4 addresses on the host, excluding localhost and

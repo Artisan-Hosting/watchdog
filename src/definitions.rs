@@ -73,12 +73,7 @@ pub const WATCHDOG_SOCKET_PATH: &str = "/tmp/artisan_watchdog.sock";
 pub const WATCHDOG_PID_LEDGER_PATH: &str = "/tmp/.artisan_watchdog_pids";
 
 /// Canonical list of files that must be present for watchdog to proceed.
-pub const CORE_VERIFICATION_PATHS: [&str; 4] = [
-    LEDGER_PATH,
-    GIT_CONFIG_PATH,
-    BUILD_SCRIPT_PATH,
-    BUILD_RUNNER_SCRIPT_PATH,
-];
+pub const CORE_VERIFICATION_PATHS: [&str; 2] = [LEDGER_PATH, GIT_CONFIG_PATH];
 
 /// Returns the AIS-qualified name for the provided application identifier.
 pub fn ais_name(component: &str) -> String {
@@ -109,11 +104,11 @@ impl ApplicationIdentifiers {
 }
 
 /// Critical application definitions, including both canonical and AIS-qualified identifiers.
-pub const CRITICAL_APPLICATIONS: [ApplicationIdentifiers; 4] = [
+pub const CRITICAL_APPLICATIONS: [ApplicationIdentifiers; 3] = [
     ApplicationIdentifiers::new(APP_MANAGER, AIS_MANAGER),
     ApplicationIdentifiers::new(APP_GITMON, AIS_GITMON),
     ApplicationIdentifiers::new(APP_MAILLER, AIS_MAILLER),
-    ApplicationIdentifiers::new(APP_WELCOME, AIS_WELCOME),
+    // ApplicationIdentifiers::new(APP_WELCOME, AIS_WELCOME),
 ];
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
