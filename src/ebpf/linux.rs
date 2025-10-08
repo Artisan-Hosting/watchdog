@@ -15,6 +15,7 @@ use aya::{
     programs::{KProbe, Program},
 };
 use bytemuck::Zeroable;
+use aya::programs::ProgramError;
 use std::{collections::HashMap, convert::TryInto, path::Path, sync::RwLock};
 
 #[derive(Clone, Copy, Debug, Zeroable)]
