@@ -328,6 +328,8 @@ async fn main() -> Result<(), ErrorArrayItem> {
             // let working_dir = PathType::Content(format!("/tmp"));
 
             let mut command = Command::new(binary_path);
+            command.uid(33);
+            command.gid(33);
             match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
                 Ok(mut child) => {
                     let pid_result = child.get_pid().await;
