@@ -70,6 +70,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
         let build_store = build_status_store.clone();
         let verification_store = verification_status_store.clone();
         let system_info_store = system_information_store.clone();
+        let process_store = system_process_store.clone();
         tokio::spawn(async move {
             if let Err(err) = grpc::serve_watchdog(
                 system_store,
@@ -77,6 +78,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
                 build_store,
                 verification_store,
                 system_info_store,
+                process_store,
             )
             .await
             {

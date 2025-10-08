@@ -1,4 +1,4 @@
-use std::io::ErrorKind;
+use std::{fmt::Write, io::ErrorKind};
 
 use artisan_middleware::dusa_collection_utils::{
     core::{logger::LogLevel, types::rb::RollingBuffer},
@@ -9,7 +9,11 @@ use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
-use crate::definitions::{self, ApplicationStatus, BuildStatus, VerificationEntry};
+use crate::{
+    definitions::{self, ApplicationStatus, BuildStatus, VerificationEntry},
+    functions,
+    grpc::proto::command_request::Payload,
+};
 
 pub mod proto {
     tonic::include_proto!("artisan.watchdog");
@@ -29,6 +33,7 @@ pub async fn serve_watchdog(
     build_status_store: definitions::BuildStatusStore,
     verification_status_store: definitions::VerificationStatusStore,
     system_information_store: definitions::SystemInformationStore,
+    process_store: definitions::ChildProcessArray,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let socket_path = definitions::WATCHDOG_SOCKET_PATH;
 
@@ -47,6 +52,7 @@ pub async fn serve_watchdog(
         build_status_store,
         verification_status_store,
         system_information_store,
+        process_store,
     );
 
     log!(
@@ -69,6 +75,7 @@ struct WatchdogService {
     build_status_store: definitions::BuildStatusStore,
     verification_status_store: definitions::VerificationStatusStore,
     system_information_store: definitions::SystemInformationStore,
+    process_handles: Vec<functions::ProcessStoreHandle>,
 }
 
 impl WatchdogService {
@@ -78,14 +85,38 @@ impl WatchdogService {
         build_status_store: definitions::BuildStatusStore,
         verification_status_store: definitions::VerificationStatusStore,
         system_information_store: definitions::SystemInformationStore,
+        process_store: definitions::ChildProcessArray,
     ) -> Self {
+        let process_handles = vec![functions::ProcessStoreHandle::system(&process_store)];
         Self {
             system_application_status_store,
             client_application_status_store,
             build_status_store,
             verification_status_store,
             system_information_store,
+            process_handles,
         }
+    }
+
+    async fn lookup_application_status(
+        &self,
+        name: &str,
+    ) -> Option<(functions::ProcessStoreKind, ApplicationStatus)> {
+        {
+            let store = self.system_application_status_store.read().await;
+            if let Some(status) = store.get(name) {
+                return Some((functions::ProcessStoreKind::System, status.clone()));
+            }
+        }
+
+        {
+            let store = self.client_application_status_store.read().await;
+            if let Some(status) = store.get(name) {
+                return Some((functions::ProcessStoreKind::Client, status.clone()));
+            }
+        }
+
+        None
     }
 }
 
@@ -206,17 +237,161 @@ impl Watchdog for WatchdogService {
     ) -> Result<Response<CommandResponse>, Status> {
         let command = request.into_inner();
 
-        let message = match command.payload {
-            Some(payload) => format!("Command received but not yet implemented: {:?}", payload),
-            None => "Command payload missing".to_string(),
+        let (accepted, message) = match command.payload {
+            Some(payload) => match payload {
+                Payload::Start(start_command) => {
+                    let application = start_command.application;
+                    match functions::start_application_stub(&application, &self.process_handles)
+                        .await
+                    {
+                        Ok(result) => (result.accepted, result.message),
+                        Err(err) => {
+                            log!(
+                                LogLevel::Error,
+                                "Failed to process start command for {}: {}",
+                                application,
+                                err.err_mesg
+                            );
+                            (
+                                false,
+                                format!(
+                                    "Failed to process start command for {}: {}",
+                                    application, err.err_mesg
+                                ),
+                            )
+                        }
+                    }
+                }
+                Payload::Stop(stop_command) => {
+                    let application = stop_command.application;
+                    match functions::stop_application_stub(&application, &self.process_handles)
+                        .await
+                    {
+                        Ok(result) => (result.accepted, result.message),
+                        Err(err) => {
+                            log!(
+                                LogLevel::Error,
+                                "Failed to process stop command for {}: {}",
+                                application,
+                                err.err_mesg
+                            );
+                            (
+                                false,
+                                format!(
+                                    "Failed to process stop command for {}: {}",
+                                    application, err.err_mesg
+                                ),
+                            )
+                        }
+                    }
+                }
+                Payload::Reload(reload_command) => {
+                    let application = reload_command.application;
+                    match functions::reload_application_stub(&application, &self.process_handles)
+                        .await
+                    {
+                        Ok(result) => (result.accepted, result.message),
+                        Err(err) => {
+                            log!(
+                                LogLevel::Error,
+                                "Failed to process reload command for {}: {}",
+                                application,
+                                err.err_mesg
+                            );
+                            (
+                                false,
+                                format!(
+                                    "Failed to process reload command for {}: {}",
+                                    application, err.err_mesg
+                                ),
+                            )
+                        }
+                    }
+                }
+                Payload::Rebuild(rebuild_command) => {
+                    let application = rebuild_command.application;
+                    match functions::rebuild_application_stub(&application, &self.process_handles)
+                        .await
+                    {
+                        Ok(result) => (result.accepted, result.message),
+                        Err(err) => {
+                            log!(
+                                LogLevel::Error,
+                                "Failed to process rebuild command for {}: {}",
+                                application,
+                                err.err_mesg
+                            );
+                            (
+                                false,
+                                format!(
+                                    "Failed to process rebuild command for {}: {}",
+                                    application, err.err_mesg
+                                ),
+                            )
+                        }
+                    }
+                }
+                Payload::Status(status_command) => {
+                    let application = status_command.application;
+                    match self.lookup_application_status(&application).await {
+                        Some((store_kind, status)) => {
+                            let pid = status
+                                .pid
+                                .map(|pid| pid.to_string())
+                                .unwrap_or_else(|| "n/a".to_string());
+                            let mut message = format!(
+                                "[status] {application} ({store_kind}) => state={:?}, pid={pid}, cpu={:.2}%, mem={:.2}",
+                                status.status, status.cpu_usage, status.memory_usage
+                            );
+                            if let Some(network) = status.network_usage.as_ref() {
+                                let _ = write!(
+                                    &mut message,
+                                    ", net_rx={}B, net_tx={}B",
+                                    network.rx_bytes, network.tx_bytes
+                                );
+                            }
+                            let _ = write!(&mut message, ", last_updated={}", status.last_updated);
+                            (true, message)
+                        }
+                        None => (
+                            false,
+                            format!(
+                                "[status] {application} is not tracked in system or client status stores"
+                            ),
+                        ),
+                    }
+                }
+                Payload::Info(_info_command) => {
+                    let info = self.system_information_store.read().await.clone();
+                    let identity = info
+                        .identity
+                        .as_ref()
+                        .map(|id| id.id.to_string())
+                        .unwrap_or_else(|| "unassigned".to_string());
+                    let ips = if info.ip_addrs.is_empty() {
+                        "none".to_string()
+                    } else {
+                        info.ip_addrs
+                            .iter()
+                            .map(|ip| ip.to_string())
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    };
+                    let message = format!(
+                        "[info] identity={identity}, system_apps_initialized={}, manager_linked={}, ip_addrs=[{ips}]",
+                        info.system_apps_initialized, info.manager_linked
+                    );
+                    (true, message)
+                }
+                Payload::Set(_set_command) => (false, "Not implemented".to_string()),
+                Payload::Get(_get_command) => (false, "Not implemented".to_string()),
+            },
+            None => (false, "Command payload missing".to_string()),
         };
 
         log!(LogLevel::Warn, "{}", message);
 
-        Ok(Response::new(CommandResponse {
-            accepted: false,
-            message,
-        }))
+        Ok(Response::new(CommandResponse { accepted, message }))
     }
 }
 

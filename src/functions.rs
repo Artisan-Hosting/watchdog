@@ -1,26 +1,33 @@
 use artisan_middleware::{
     dusa_collection_utils::{
-        core::{errors::ErrorArrayItem, logger::LogLevel, types::pathtype::PathType},
+        core::{
+            errors::{ErrorArray, ErrorArrayItem},
+            logger::LogLevel,
+            types::pathtype::PathType,
+        },
         log,
     },
     git_actions::GitCredentials,
+    process_manager::spawn_complex_process,
     state_persistence::{AppState, StatePersistence},
 };
 use get_if_addrs::{IfAddr, get_if_addrs};
+use nix::libc::{self, SIGHUP, kill};
 use std::{
     collections::{HashMap, HashSet},
-    fs, io,
+    fmt, fs, io,
     net::Ipv4Addr,
     time::Duration,
 };
-use tokio::time;
+use tokio::{process::Command, time};
 
 use crate::{
     definitions::{
-        self, ARTISAN_BIN_DIR, ApplicationIdentifiers, ApplicationStatus, CRITICAL_APPLICATIONS,
-        GIT_CONFIG_PATH, VerificationEntry,
+        self, ARTISAN_BIN_DIR, ApplicationIdentifiers, ApplicationStatus, BuildStatus,
+        CRITICAL_APPLICATIONS, GIT_CONFIG_PATH, SupervisedProcesses, VerificationEntry,
     },
     ebpf,
+    scripts::{build_application, build_runner_binary, revert_to_vetted},
 };
 
 // ! touching this will ruin your day
@@ -537,4 +544,396 @@ struct ProcessObservations {
     stdout: Option<Vec<(u64, String)>>,
     stderr: Option<Vec<(u64, String)>>,
     pid: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessStoreKind {
+    System,
+    Client,
+    Custom(&'static str),
+}
+
+impl fmt::Display for ProcessStoreKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessStoreKind::System => write!(f, "system"),
+            ProcessStoreKind::Client => write!(f, "client"),
+            ProcessStoreKind::Custom(label) => write!(f, "{label}"),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ProcessStoreHandle {
+    kind: ProcessStoreKind,
+    store: definitions::ChildProcessArray,
+}
+
+impl ProcessStoreHandle {
+    pub fn system(store: &definitions::ChildProcessArray) -> Self {
+        Self {
+            kind: ProcessStoreKind::System,
+            store: store.clone(),
+        }
+    }
+
+    pub fn client(store: &definitions::ChildProcessArray) -> Self {
+        Self {
+            kind: ProcessStoreKind::Client,
+            store: store.clone(),
+        }
+    }
+
+    pub fn custom(label: &'static str, store: &definitions::ChildProcessArray) -> Self {
+        Self {
+            kind: ProcessStoreKind::Custom(label),
+            store: store.clone(),
+        }
+    }
+
+    pub fn kind(&self) -> ProcessStoreKind {
+        self.kind
+    }
+
+    pub async fn insert(
+        &self,
+        name: &str,
+        process: definitions::SupervisedProcesses,
+    ) -> Result<(), ErrorArrayItem> {
+        let mut guard = self.store.try_write().await?;
+        guard.insert(name.to_string(), process);
+        Ok(())
+    }
+}
+
+pub async fn take_process_by_name(
+    name: &str,
+    stores: &[ProcessStoreHandle],
+) -> Result<Option<(ProcessStoreHandle, definitions::SupervisedProcesses)>, ErrorArrayItem> {
+    for store_ref in stores {
+        let handle = store_ref.clone();
+        let mut guard = handle.store.try_write().await?;
+        let process = guard.remove(name);
+        drop(guard);
+        if let Some(process) = process {
+            return Ok(Some((handle, process)));
+        }
+    }
+
+    Ok(None)
+}
+
+pub struct CommandStubResult {
+    pub accepted: bool,
+    pub message: String,
+}
+
+impl CommandStubResult {
+    fn new(accepted: bool, message: String) -> Self {
+        Self { accepted, message }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CommandAction {
+    Start,
+    Stop,
+    Reload,
+    Rebuild,
+}
+
+impl fmt::Display for CommandAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let action = match self {
+            CommandAction::Start => "start",
+            CommandAction::Stop => "stop",
+            CommandAction::Reload => "reload",
+            CommandAction::Rebuild => "rebuild",
+        };
+        write!(f, "{action}")
+    }
+}
+
+pub async fn start_application_stub(
+    application: &str,
+    stores: &[ProcessStoreHandle],
+) -> Result<CommandStubResult, ErrorArrayItem> {
+    match take_process_by_name(application, stores).await? {
+        Some((handle, _)) => {
+            let origin = handle.kind();
+            let binary_path = PathType::Content(format!("{}/{}", ARTISAN_BIN_DIR, application));
+            let working_dir = PathType::Content(format!("/etc/{}", application));
+
+            if !binary_path.exists() {
+                return Ok(CommandStubResult::new(
+                    true,
+                    format!(
+                        "[stub] start command located {application} in {origin} registry; Failed: {} not found",
+                        binary_path
+                    ),
+                ));
+            }
+
+            let mut command = Command::new(binary_path);
+            match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
+                Ok(mut child) => {
+                    if let Ok(pid) = child.get_pid().await {
+                        log!(LogLevel::Info, "Started: {}:{}", application, pid);
+
+                        if let Err(err) = ebpf::register_pid(pid) {
+                            log!(
+                                LogLevel::Warn,
+                                "Failed to register {} (PID {}) with eBPF tracker: {}",
+                                application,
+                                pid,
+                                err.err_mesg
+                            );
+                        }
+
+                        if let Err(err) =
+                            crate::pid_persistence::remember_process(application, pid).await
+                        {
+                            log!(
+                                LogLevel::Error,
+                                "Failed to persist PID for {}: {}",
+                                application,
+                                err.err_mesg
+                            );
+                        }
+                    }
+
+                    child.monitor_stdx().await;
+                    child.monitor_usage().await;
+                    handle
+                        .insert(application, SupervisedProcesses::Child(child))
+                        .await?;
+                }
+                Err(err) => {
+                    log!(LogLevel::Error, "Failed to spawn: {}: {}", application, err);
+                }
+            };
+
+            Ok(CommandStubResult::new(
+                true,
+                format!("[stub] start command located {application} in {origin} registry; OK"),
+            ))
+        }
+        None => Ok(CommandStubResult::new(
+            false,
+            format!("[stub] start command could not find {application} in any process registry"),
+        )),
+    }
+}
+
+pub async fn stop_application_stub(
+    application: &str,
+    stores: &[ProcessStoreHandle],
+) -> Result<CommandStubResult, ErrorArrayItem> {
+    match take_process_by_name(application, stores).await? {
+        Some((handle, process)) => {
+            let origin = handle.kind();
+
+            match process {
+                SupervisedProcesses::Child(mut supervised_child) => {
+                    if let Err(err) = supervised_child.kill().await {
+                        handle
+                            .insert(application, SupervisedProcesses::Child(supervised_child))
+                            .await?;
+                        return Ok(CommandStubResult::new(
+                            true,
+                            format!(
+                                "[stub] stop command located {application} in {origin} registry; Failed: {}",
+                                err.err_mesg
+                            ),
+                        ));
+                    }
+                }
+                SupervisedProcesses::Process(mut supervised_process) => {
+                    if let Err(err) = supervised_process.kill() {
+                        handle
+                            .insert(
+                                application,
+                                SupervisedProcesses::Process(supervised_process),
+                            )
+                            .await?;
+                        return Ok(CommandStubResult::new(
+                            true,
+                            format!(
+                                "[stub] stop command located {application} in {origin} registry; Failed: {}",
+                                err.err_mesg
+                            ),
+                        ));
+                    }
+                }
+            }
+
+            Ok(CommandStubResult::new(
+                true,
+                format!("[stub] stop command located {application} in {origin} registry; OK"),
+            ))
+        }
+        None => Ok(CommandStubResult::new(
+            false,
+            format!("[stub] stop command could not find {application} in any process registry"),
+        )),
+    }
+}
+
+pub async fn reload_application_stub(
+    application: &str,
+    stores: &[ProcessStoreHandle],
+) -> Result<CommandStubResult, ErrorArrayItem> {
+    match take_process_by_name(application, stores).await? {
+        Some((_, process)) => {
+            // let origin = process.kind();
+
+            match process {
+                SupervisedProcesses::Child(supervised_child) => {
+                    match supervised_child.get_pid().await {
+                        Ok(pid) => {
+                            let res = unsafe { kill(pid as i32, SIGHUP) };
+                            if res == 0 {
+                                log!(LogLevel::Trace, "Sent SIGHUP to pid: {}", pid);
+                                Ok(CommandStubResult::new(
+                                    true,
+                                    format!(
+                                        "[stub] reload command located {application} registry; OK"
+                                    ),
+                                ))
+                            } else {
+                                let err = io::Error::last_os_error();
+                                Ok(CommandStubResult::new(
+                                    true,
+                                    format!(
+                                        "[stub] reload command located {application} registry; Failed to send SIGHUP to pid {}: {}",
+                                        pid, err
+                                    ),
+                                ))
+                            }
+                        }
+                        Err(err) => Ok(CommandStubResult::new(
+                            true,
+                            format!(
+                                "[stub] reload command located {application} in registry; Failed: {}",
+                                err.err_mesg
+                            ),
+                        )),
+                    }
+                }
+                SupervisedProcesses::Process(supervised_process) => {
+                    let pid = supervised_process.get_pid();
+                    let res = unsafe { kill(pid as i32, SIGHUP) };
+                    if res == 0 {
+                        log!(LogLevel::Trace, "Sent SIGHUP to pid: {}", pid);
+                        Ok(CommandStubResult::new(
+                            true,
+                            format!(
+                                "[stub] reload command located {application} in registry; OK"
+                            ),
+                        ))
+                    } else {
+                        let err = io::Error::last_os_error();
+                        Ok(CommandStubResult::new(
+                            true,
+                            format!(
+                                "[stub] reload command located {application} in registry; Failed to send SIGHUP to pid {}: {}",
+                                pid, err
+                            ),
+                        ))
+                    }
+                }
+            }
+        }
+        None => Ok(CommandStubResult::new(
+            false,
+            format!("[stub] reload command could not find {application} in any process registry"),
+        )),
+    }
+}
+
+pub async fn rebuild_application_stub(
+    application: &str,
+    stores: &[ProcessStoreHandle],
+) -> Result<CommandStubResult, ErrorArrayItem> {
+    match take_process_by_name(application, stores).await? {
+        Some((handle, _)) => {
+            let origin = handle.kind();
+
+            // stop first
+            let _ = stop_application_stub(application, stores).await?;
+
+            match origin {
+                ProcessStoreKind::System => match build_application(application) {
+                    Ok(_) => log!(LogLevel::Info, "Built: {}!", application),
+                    Err(err) => {
+                        log!(
+                            LogLevel::Error,
+                            "Failed to build {}: {}",
+                            application,
+                            err.err_mesg
+                        );
+                        if let Err(fallback_err) = revert_to_vetted(application) {
+                            log!(
+                                LogLevel::Error,
+                                "Failed to fall back to earlier version: {}",
+                                fallback_err.err_mesg
+                            );
+                        }
+                    }
+                },
+                ProcessStoreKind::Client => {
+                    let client_apps = match generate_safe_client_runner_list().await {
+                        Ok(data) => data,
+                        Err(err) => {
+                            log!(
+                                LogLevel::Error,
+                                "Failed to compile safe runner list: {}",
+                                err.err_mesg
+                            );
+                            Vec::new()
+                        }
+                    };
+
+                    if !client_apps.contains(&application.to_string()) {
+                        return Ok(CommandStubResult::new(
+                            true,
+                            format!(
+                                "[stub] rebuild command located {application} in {origin} registry; SECURITY VIOLATION"
+                            ),
+                        ));
+                    }
+
+                    if let Err(err) = build_runner_binary(application) {
+                        log!(
+                            LogLevel::Error,
+                            "Failed to build runner for {}: {}. Attempting fallback.",
+                            application,
+                            err.err_mesg
+                        );
+                        let _ = revert_to_vetted(application);
+                    }
+                }
+                ProcessStoreKind::Custom(desc) => {
+                    return Ok(CommandStubResult::new(
+                        true,
+                        format!(
+                            "[stub] rebuild command located {application} in {origin} registry; Unimplemented: {}",
+                            desc
+                        ),
+                    ));
+                }
+            }
+
+            let _ = start_application_stub(application, stores).await?;
+
+            Ok(CommandStubResult::new(
+                true,
+                format!("[stub] rebuild command located {application} in {origin} registry; OK"),
+            ))
+        }
+        None => Ok(CommandStubResult::new(
+            false,
+            format!("[stub] rebuild command could not find {application} in any process registry"),
+        )),
+    }
 }
