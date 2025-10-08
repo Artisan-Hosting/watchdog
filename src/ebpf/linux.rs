@@ -9,13 +9,13 @@ use artisan_middleware::{
     },
     process_manager::is_pid_active,
 };
+use aya::programs::ProgramError;
 use aya::{
     Bpf, include_bytes_aligned,
     maps::HashMap as BpfHashMap,
     programs::{KProbe, Program},
 };
 use bytemuck::Zeroable;
-use aya::programs::ProgramError;
 use std::{collections::HashMap, convert::TryInto, path::Path, sync::RwLock};
 
 #[derive(Clone, Copy, Debug, Zeroable)]
@@ -61,17 +61,19 @@ impl BandwidthTracker {
                 )
             })?;
 
-            let kprobe: &mut KProbe = program
-                .try_into()
-                .map_err(|err: ProgramError| ErrorArrayItem::new(Errors::GeneralError, err.to_string()))?;
+            let kprobe: &mut KProbe = program.try_into().map_err(|err: ProgramError| {
+                ErrorArrayItem::new(Errors::GeneralError, err.to_string())
+            })?;
 
-            kprobe
-                .load()
-                .map_err(|err: ProgramError| ErrorArrayItem::new(Errors::GeneralError, err.to_string()))?;
+            kprobe.load().map_err(|err: ProgramError| {
+                ErrorArrayItem::new(Errors::GeneralError, err.to_string())
+            })?;
 
             kprobe
                 .attach(attach_point, 0)
-                .map_err(|err: ProgramError| ErrorArrayItem::new(Errors::GeneralError, err.to_string()))?;
+                .map_err(|err: ProgramError| {
+                    ErrorArrayItem::new(Errors::GeneralError, err.to_string())
+                })?;
 
             log!(
                 LogLevel::Debug,

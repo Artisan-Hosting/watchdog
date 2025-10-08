@@ -26,6 +26,7 @@ pub mod definitions;
 pub mod ebpf;
 pub mod functions;
 pub mod grpc;
+pub mod pid_persistence;
 pub mod scripts;
 
 #[tokio::main]
@@ -53,6 +54,9 @@ async fn main() -> Result<(), ErrorArrayItem> {
     let verification_status_store = defs::new_verification_status_store();
     let system_information_store = defs::new_system_information_store();
     let system_process_store = defs::new_child_process_array();
+
+    crate::pid_persistence::initialise().await?;
+    crate::pid_persistence::reclaim_orphan_processes().await?;
 
     {
         let system_status_store = system_application_status_store.clone();
@@ -197,7 +201,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
         for app in system_app_array {
             if app.canonical != "welcome" {
                 let binary_path = PathType::Content(format!("{}/{}", ARTISAN_BIN_DIR, app.ais));
-                let working_dir = PathType::Content(format!("/etc/{}", app.ais));    //This is the production value
+                let working_dir = PathType::Content(format!("/etc/{}", app.ais)); //This is the production value
                 // let working_dir = PathType::Content(format!("/opt/artisan/apps/{}", app.ais));
 
                 // assembling command
@@ -216,6 +220,17 @@ async fn main() -> Result<(), ErrorArrayItem> {
                                         "Failed to register {} (PID {}) with eBPF tracker: {}",
                                         app.ais,
                                         pid,
+                                        err.err_mesg
+                                    );
+                                }
+
+                                if let Err(err) =
+                                    crate::pid_persistence::remember_process(app.ais, pid).await
+                                {
+                                    log!(
+                                        LogLevel::Error,
+                                        "Failed to persist PID for {}: {}",
+                                        app.ais,
                                         err.err_mesg
                                     );
                                 }
@@ -308,7 +323,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
 
         for client_app in &client_applications {
             let binary_path = PathType::Content(format!("{}/{}", ARTISAN_BIN_DIR, client_app));
-            let working_dir = PathType::Content(format!("/etc/{}", client_app));   // This is the production value
+            let working_dir = PathType::Content(format!("/etc/{}", client_app)); // This is the production value
             // let working_dir = PathType::Content(format!("/opt/artisan/apps/{}", client_app)); // This is the production value
             // let working_dir = PathType::Content(format!("/tmp"));
 
@@ -327,6 +342,17 @@ async fn main() -> Result<(), ErrorArrayItem> {
                                     "Failed to register {} (PID {}) with eBPF tracker: {}",
                                     client_app,
                                     pid,
+                                    err.err_mesg
+                                );
+                            }
+
+                            if let Err(err) =
+                                crate::pid_persistence::remember_process(client_app, pid).await
+                            {
+                                log!(
+                                    LogLevel::Error,
+                                    "Failed to persist PID for {}: {}",
+                                    client_app,
                                     err.err_mesg
                                 );
                             }

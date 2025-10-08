@@ -2,9 +2,13 @@ use std::{collections::HashMap, net::Ipv4Addr, sync::Arc};
 
 use artisan_middleware::{
     aggregator::{NetworkUsage, Status},
-    dusa_collection_utils::{core::{logger::LogLevel, types::{
-        pathtype::PathType, rb::RollingBuffer, rwarc::LockWithTimeout,
-    }}, log},
+    dusa_collection_utils::{
+        core::{
+            logger::LogLevel,
+            types::{pathtype::PathType, rb::RollingBuffer, rwarc::LockWithTimeout},
+        },
+        log,
+    },
     identity::Identifier,
     process_manager::{SupervisedChild, SupervisedProcess},
     timestamp::current_timestamp,
@@ -65,6 +69,8 @@ pub const VETTED_LATEST_SUFFIX: &str = "_latest";
 pub const APPLICATION_STD_BUFFER_SIZE: usize = 500;
 /// Filesystem path to the watchdog gRPC Unix domain socket.
 pub const WATCHDOG_SOCKET_PATH: &str = "/tmp/artisan_watchdog.sock";
+/// Location where we persist encrypted PID ledgers for crash recovery.
+pub const WATCHDOG_PID_LEDGER_PATH: &str = "/tmp/.artisan_watchdog_pids";
 
 /// Canonical list of files that must be present for watchdog to proceed.
 pub const CORE_VERIFICATION_PATHS: [&str; 4] = [
@@ -317,9 +323,9 @@ impl Default for ArtisanSystemInformation {
             Err(err) => {
                 log!(LogLevel::Warn, "Failed to pull ips: {}", err.to_string());
                 Vec::new()
-            },
+            }
         };
-        
+
         Self {
             identity: Identifier::load_from_file().unwrap().into(),
             system_apps_initialized: true,

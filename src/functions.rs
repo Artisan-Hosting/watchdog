@@ -1,5 +1,3 @@
-use std::{collections::HashMap, fs, io, net::Ipv4Addr, time::Duration};
-use get_if_addrs::{get_if_addrs, IfAddr};
 use artisan_middleware::{
     dusa_collection_utils::{
         core::{errors::ErrorArrayItem, logger::LogLevel, types::pathtype::PathType},
@@ -8,6 +6,8 @@ use artisan_middleware::{
     git_actions::GitCredentials,
     state_persistence::{AppState, StatePersistence},
 };
+use get_if_addrs::{IfAddr, get_if_addrs};
+use std::{collections::HashMap, fs, io, net::Ipv4Addr, time::Duration};
 use tokio::time;
 
 use crate::{
@@ -475,16 +475,32 @@ pub fn get_all_ipv4() -> io::Result<Vec<Ipv4Addr>> {
         .filter(|iface| {
             let n = iface.name.to_lowercase();
             // skip loopback interface by name
-            if n == "lo" { return false; }
+            if n == "lo" {
+                return false;
+            }
             // common docker/podman/bridge/veth names
-            if n.starts_with("docker")    { return false; }
-            if n.starts_with("br-")       { return false; }
-            if n.starts_with("veth")      { return false; }
-            if n.starts_with("cni")       { return false; }
-            if n.starts_with("flannel.")  { return false; }
+            if n.starts_with("docker") {
+                return false;
+            }
+            if n.starts_with("br-") {
+                return false;
+            }
+            if n.starts_with("veth") {
+                return false;
+            }
+            if n.starts_with("cni") {
+                return false;
+            }
+            if n.starts_with("flannel.") {
+                return false;
+            }
             // windows docker virtual switch
-            if n.contains("docker")       { return false; }
-            if n.contains("vethernet")    { return false; }
+            if n.contains("docker") {
+                return false;
+            }
+            if n.contains("vethernet") {
+                return false;
+            }
             true
         })
         .filter_map(|iface| {
@@ -492,7 +508,9 @@ pub fn get_all_ipv4() -> io::Result<Vec<Ipv4Addr>> {
                 IfAddr::V4(v4) => {
                     let ip = v4.ip;
                     // exclude localhost by address
-                    if ip.is_loopback() { return None; }
+                    if ip.is_loopback() {
+                        return None;
+                    }
                     Some(ip)
                 }
                 _ => None,
@@ -506,7 +524,6 @@ pub fn get_all_ipv4() -> io::Result<Vec<Ipv4Addr>> {
 
     Ok(ips)
 }
-
 
 fn state_file_path(ais_name: &str) -> PathType {
     PathType::Content(format!("/tmp/.{}.state", ais_name))
