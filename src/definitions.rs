@@ -57,7 +57,7 @@ pub const APP_WELCOME: &str = "welcome";
 pub const AIS_RUNNER_SRC_DIR: &str = "/opt/artisan/apps/ais_runner";
 
 /// String prefix used when constructing build log file names.
-pub const BUILD_LOG_PREFIX: &str = "ais_build_";
+pub const BUILD_LOG_PREFIX: &str = "build";
 
 /// Git branch that watchdog pulls during automated builds.
 pub const RELEASE_BRANCH: &str = "release";
