@@ -12,6 +12,11 @@ use artisan_middleware::{
     state_persistence::{AppState, StatePersistence},
 };
 use get_if_addrs::{IfAddr, get_if_addrs};
+use nix::sys::signal::{
+    Signal::{self, SIGHUP},
+    kill,
+};
+use nix::unistd::Pid;
 use std::{
     collections::{HashMap, HashSet},
     fmt, fs, io,
@@ -19,16 +24,13 @@ use std::{
     time::Duration,
 };
 use tokio::{process::Command, time};
-use nix::sys::signal::{kill, Signal::{self, SIGHUP}};
-use nix::unistd::Pid;
 
 use crate::{
     definitions::{
-        self, ARTISAN_BIN_DIR, ApplicationIdentifiers, ApplicationStatus,
-        CRITICAL_APPLICATIONS, GIT_CONFIG_PATH, SupervisedProcesses, VerificationEntry,
+        self, ApplicationIdentifiers, ApplicationStatus, SupervisedProcesses, VerificationEntry, ARTISAN_BIN_DIR, CRITICAL_APPLICATIONS, GIT_CONFIG_PATH
     },
     ebpf,
-    scripts::{build_application, revert_to_vetted},
+    scripts::{build_application, build_runner_binary, revert_to_vetted},
 };
 
 // ! touching this will ruin your day
@@ -606,10 +608,7 @@ impl ProcessStoreHandle {
         Ok(())
     }
 
-    pub async fn remove(
-        &self,
-        name: &str,
-    ) -> Result<(), ErrorArrayItem> {
+    pub async fn remove(&self, name: &str) -> Result<(), ErrorArrayItem> {
         let mut guard = self.store.try_write().await?;
         guard.remove(name);
         Ok(())
@@ -690,10 +689,9 @@ pub async fn start_application_stub(
         }
         Ok(None) => {
             // Fallback to first writable store
-            let default_handle = stores
-                .iter()
-                .find(|s| s.is_writable())
-                .ok_or_else(|| ErrorArrayItem::new(Errors::NotFound , "No writable store available"))?;
+            let default_handle = stores.iter().find(|s| s.is_writable()).ok_or_else(|| {
+                ErrorArrayItem::new(Errors::NotFound, "No writable store available")
+            })?;
             default_handle.clone()
         }
         Err(err) => return Err(err),
@@ -828,26 +826,21 @@ pub async fn stop_application_stub(
                         ))
                     }
                 }
-                Err(err) => {
-                    Ok(CommandStubResult::new(
-                        true,
-                        format!(
-                            "[stub] stop command located {application} in {origin} registry; Failed to resolve PID: {}",
-                            err.err_mesg
-                        ),
-                    ))
-                }
+                Err(err) => Ok(CommandStubResult::new(
+                    true,
+                    format!(
+                        "[stub] stop command located {application} in {origin} registry; Failed to resolve PID: {}",
+                        err.err_mesg
+                    ),
+                )),
             }
         }
         None => Ok(CommandStubResult::new(
             false,
-            format!(
-                "[stub] stop command could not find {application} in any process registry"
-            ),
+            format!("[stub] stop command could not find {application} in any process registry"),
         )),
     }
 }
-
 
 pub async fn reload_application_stub(
     application: &str,
@@ -935,7 +928,12 @@ pub async fn rebuild_application_stub(
                 ProcessStoreKind::System => match build_application(application) {
                     Ok(_) => log!(LogLevel::Info, "Built: {}!", application),
                     Err(err) => {
-                        log!(LogLevel::Error, "Failed to build {}: {}", application, err.err_mesg);
+                        log!(
+                            LogLevel::Error,
+                            "Failed to build {}: {}",
+                            application,
+                            err.err_mesg
+                        );
                         if let Err(fallback_err) = revert_to_vetted(application) {
                             log!(
                                 LogLevel::Error,
@@ -946,7 +944,44 @@ pub async fn rebuild_application_stub(
                     }
                 },
                 ProcessStoreKind::Client => {
-                    // ... (client build logic unchanged)
+                    let client_applications = match generate_safe_client_runner_list().await {
+                        Ok(data) => data,
+                        Err(err) => {
+                            log!(
+                                LogLevel::Error,
+                                "Failed to compile safe runner list: {}",
+                                err.err_mesg
+                            );
+                            Vec::new()
+                        }
+                    };
+                    if !client_applications.contains(&application.to_string()) {
+                        return Ok(CommandStubResult::new(
+                            true,
+                            format!(
+                                "[stub] rebuild command located {application} in {origin} registry; SECURITY VIOLATION",
+                            ),
+                        ));
+                    }
+                    log!(LogLevel::Info, "Building: {}!", application);
+                    if let Err(err) = build_runner_binary(application) {
+                        log!(
+                            LogLevel::Error,
+                            "Failed to build: {}:{}. Attempting fallback",
+                            application,
+                            err.err_mesg
+                        );
+                        if let Err(err) = revert_to_vetted(application) {
+                            log!(
+                                LogLevel::Error,
+                                "Failed to fallback for {}: {}",
+                                application,
+                                err.err_mesg
+                            );
+                        }
+                    } else {
+                        log!(LogLevel::Info, "Built: {}!", application);
+                    }
                 }
                 ProcessStoreKind::Custom(desc) => {
                     return Ok(CommandStubResult::new(
@@ -964,16 +999,12 @@ pub async fn rebuild_application_stub(
 
             Ok(CommandStubResult::new(
                 true,
-                format!(
-                    "[stub] rebuild command located {application} in {origin} registry; OK"
-                ),
+                format!("[stub] rebuild command located {application} in {origin} registry; OK"),
             ))
         }
         None => Ok(CommandStubResult::new(
             false,
-            format!(
-                "[stub] rebuild command could not find {application} in any process registry"
-            ),
+            format!("[stub] rebuild command could not find {application} in any process registry"),
         )),
     }
 }
