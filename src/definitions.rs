@@ -2,14 +2,16 @@ use std::{collections::HashMap, net::Ipv4Addr, sync::Arc};
 
 use artisan_middleware::{
     aggregator::{NetworkUsage, Status},
-    dusa_collection_utils::core::types::{
+    dusa_collection_utils::{core::{logger::LogLevel, types::{
         pathtype::PathType, rb::RollingBuffer, rwarc::LockWithTimeout,
-    },
+    }}, log},
     identity::Identifier,
     process_manager::{SupervisedChild, SupervisedProcess},
     timestamp::current_timestamp,
 };
 use tokio::sync::RwLock;
+
+use crate::functions::get_all_ipv4;
 
 /// Base directory housing all Artisan applications.
 pub const ARTISAN_APPS_DIR: &str = "/opt/artisan/apps";
@@ -206,6 +208,8 @@ pub enum SupervisedProcesses {
 }
 
 pub type ApplicationStatusStore = Arc<RwLock<HashMap<String, ApplicationStatus>>>;
+pub type SystemApplicationStatusStore = ApplicationStatusStore;
+pub type ClientApplicationStatusStore = ApplicationStatusStore;
 pub type BuildStatusStore = Arc<RwLock<HashMap<String, BuildStatus>>>;
 pub type VerificationStatusStore = Arc<RwLock<Vec<VerificationEntry>>>;
 pub type SystemInformationStore = Arc<RwLock<ArtisanSystemInformation>>;
@@ -213,6 +217,16 @@ pub type ChildProcessArray = Arc<LockWithTimeout<HashMap<String, SupervisedProce
 
 pub fn new_application_status_store() -> ApplicationStatusStore {
     Arc::new(RwLock::new(HashMap::new()))
+}
+
+/// Returns a fresh store for system-critical application statuses.
+pub fn new_system_application_status_store() -> SystemApplicationStatusStore {
+    new_application_status_store()
+}
+
+/// Returns a fresh store for tenant/client application statuses.
+pub fn new_client_application_status_store() -> ClientApplicationStatusStore {
+    new_application_status_store()
 }
 
 pub fn new_build_status_store() -> BuildStatusStore {
@@ -298,10 +312,18 @@ impl ArtisanSystemInformation {
 
 impl Default for ArtisanSystemInformation {
     fn default() -> Self {
+        let ips = match get_all_ipv4() {
+            Ok(data) => data,
+            Err(err) => {
+                log!(LogLevel::Warn, "Failed to pull ips: {}", err.to_string());
+                Vec::new()
+            },
+        };
+        
         Self {
             identity: Identifier::load_from_file().unwrap().into(),
             system_apps_initialized: true,
-            ip_addrs: [Ipv4Addr::new(127, 0, 0, 1)].to_vec(),
+            ip_addrs: ips,
             manager_linked: false,
         }
     }

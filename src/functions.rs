@@ -1,5 +1,5 @@
-use std::{fs, time::Duration};
-
+use std::{collections::HashMap, fs, io, net::Ipv4Addr, time::Duration};
+use get_if_addrs::{get_if_addrs, IfAddr};
 use artisan_middleware::{
     dusa_collection_utils::{
         core::{errors::ErrorArrayItem, logger::LogLevel, types::pathtype::PathType},
@@ -72,6 +72,9 @@ pub fn verify_path(path: PathType) -> Result<VerificationEntry, ErrorArrayItem> 
     Ok(verification_entry)
 }
 
+/// Builds the list of client application binaries that should be built/spawned.
+/// The resulting list excludes core system processes and only includes entries
+/// that have a matching credential in the git configuration.
 pub async fn generate_safe_client_runner_list() -> Result<Vec<String>, ErrorArrayItem> {
     let mut application_list: Vec<String> = Vec::new();
 
@@ -170,18 +173,31 @@ pub async fn generate_safe_client_runner_list() -> Result<Vec<String>, ErrorArra
 //     Ok(())
 // }
 
+/// Periodically refreshes application status data for both system-critical
+/// and client-managed processes. Stats for each cohort are stored separately
+/// so operators can reason about platform health without sifting through
+/// tenant workloads.
 pub async fn monitor_application_states(
-    status_store: definitions::ApplicationStatusStore,
+    system_status_store: definitions::SystemApplicationStatusStore,
+    client_status_store: definitions::ClientApplicationStatusStore,
     process_store: definitions::ChildProcessArray,
     interval: Duration,
 ) {
     let mut ticker = time::interval(interval);
     loop {
         ticker.tick().await;
-        if let Err(err) = refresh_application_statuses_once(&status_store, &process_store).await {
+        if let Err(err) = refresh_system_statuses_once(&system_status_store, &process_store).await {
             log!(
                 LogLevel::Warn,
                 "Failed to refresh application statuses: {}",
+                err.err_mesg
+            );
+        }
+
+        if let Err(err) = refresh_client_statuses_once(&client_status_store, &process_store).await {
+            log!(
+                LogLevel::Trace,
+                "Failed to refresh client application statuses: {}",
                 err.err_mesg
             );
         }
@@ -196,8 +212,8 @@ pub async fn monitor_application_states(
     }
 }
 
-async fn refresh_application_statuses_once(
-    status_store: &definitions::ApplicationStatusStore,
+async fn refresh_system_statuses_once(
+    status_store: &definitions::SystemApplicationStatusStore,
     process_store: &definitions::ChildProcessArray,
 ) -> Result<(), ErrorArrayItem> {
     for app in definitions::CRITICAL_APPLICATIONS.iter() {
@@ -249,6 +265,34 @@ async fn refresh_application_statuses_once(
         let mut store = status_store.write().await;
         store.insert(app.ais.to_string(), app_status);
     }
+
+    Ok(())
+}
+
+async fn refresh_client_statuses_once(
+    client_store: &definitions::ClientApplicationStatusStore,
+    process_store: &definitions::ChildProcessArray,
+) -> Result<(), ErrorArrayItem> {
+    let processes = process_store.try_read().await?;
+    let mut new_statuses: HashMap<String, ApplicationStatus> = HashMap::new();
+
+    for (name, process) in processes.iter() {
+        if definitions::CRITICAL_APPLICATIONS
+            .iter()
+            .any(|system_app| system_app.ais == name)
+        {
+            continue;
+        }
+
+        if let Some(status) = build_status_from_process(process).await? {
+            new_statuses.insert(name.clone(), status);
+        }
+    }
+
+    drop(processes);
+
+    let mut store = client_store.write().await;
+    *store = new_statuses;
 
     Ok(())
 }
@@ -328,6 +372,141 @@ async fn collect_process_observations(
 
     Ok(observations)
 }
+
+/// Creates an `ApplicationStatus` snapshot for a non-critical process purely
+/// from the live `SupervisedProcess`/`SupervisedChild` handle.
+async fn build_status_from_process(
+    process: &definitions::SupervisedProcesses,
+) -> Result<Option<ApplicationStatus>, ErrorArrayItem> {
+    let mut observations = ProcessObservations::default();
+
+    match process {
+        definitions::SupervisedProcesses::Child(child) => {
+            if let Ok(metrics) = child.get_metrics().await {
+                observations.metrics = Some(metrics);
+            }
+            if let Ok(stdout) = child.get_std_out().await {
+                observations.stdout = Some(stdout);
+            }
+            if let Ok(stderr) = child.get_std_err().await {
+                observations.stderr = Some(stderr);
+            }
+            if let Ok(pid) = child.get_pid().await {
+                observations.pid = Some(pid);
+            }
+        }
+        definitions::SupervisedProcesses::Process(proc) => {
+            if let Ok(metrics) = proc.get_metrics().await {
+                observations.metrics = Some(metrics);
+            }
+            observations.pid = Some(proc.get_pid() as u32);
+        }
+    }
+
+    if let Some(pid) = observations.pid {
+        match ebpf::usage_for_pid(pid) {
+            Ok(Some(usage)) => {
+                if let Some(metrics) = observations.metrics.as_mut() {
+                    metrics.other = Some(usage);
+                } else {
+                    observations.metrics = Some(artisan_middleware::aggregator::Metrics {
+                        cpu_usage: 0.0,
+                        memory_usage: 0.0,
+                        other: Some(usage),
+                    });
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                log!(
+                    LogLevel::Trace,
+                    "Failed to read eBPF usage for PID {}: {}",
+                    pid,
+                    err.err_mesg
+                );
+            }
+        }
+    }
+
+    if observations.metrics.is_none()
+        && observations.stdout.is_none()
+        && observations.stderr.is_none()
+        && observations.pid.is_none()
+    {
+        return Ok(None);
+    }
+
+    let metrics = observations.metrics;
+    let cpu_usage: f32 = metrics.as_ref().map(|m| m.cpu_usage).unwrap_or_default();
+    let memory_usage: f64 = metrics.as_ref().map(|m| m.memory_usage).unwrap_or_default();
+    let network_usage = metrics.as_ref().and_then(|m| m.other.clone());
+
+    let stdout_buffer =
+        definitions::rolling_buffer_from_entries(observations.stdout.unwrap_or_default());
+    let stderr_buffer =
+        definitions::rolling_buffer_from_entries(observations.stderr.unwrap_or_default());
+
+    let status = ApplicationStatus::new(
+        artisan_middleware::aggregator::Status::Unknown,
+        cpu_usage,
+        memory_usage,
+        observations.pid,
+        current_timestamp_wrapper(),
+        stdout_buffer,
+        stderr_buffer,
+        network_usage,
+    );
+
+    Ok(Some(status))
+}
+
+/// Collects all IPv4 addresses on the host, excluding localhost and
+/// common container/virtual bridge interfaces (Docker/Podman/veth).
+pub fn get_all_ipv4() -> io::Result<Vec<Ipv4Addr>> {
+    let interfaces = get_if_addrs().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    // Interface-name patterns to exclude (case-insensitive)
+    // - Linux: lo, docker0, br-*, veth*, cni*, flannel.*
+    // - Podman: cni-podman0
+    // - Windows: vEthernet (DockerNAT), anything containing "docker"
+    // - macOS with Docker: bridge/utun variations sometimes appear; filter "bridge" conservatively only if it mentions docker.
+    let mut ips: Vec<Ipv4Addr> = interfaces
+        .into_iter()
+        .filter(|iface| {
+            let n = iface.name.to_lowercase();
+            // skip loopback interface by name
+            if n == "lo" { return false; }
+            // common docker/podman/bridge/veth names
+            if n.starts_with("docker")    { return false; }
+            if n.starts_with("br-")       { return false; }
+            if n.starts_with("veth")      { return false; }
+            if n.starts_with("cni")       { return false; }
+            if n.starts_with("flannel.")  { return false; }
+            // windows docker virtual switch
+            if n.contains("docker")       { return false; }
+            if n.contains("vethernet")    { return false; }
+            true
+        })
+        .filter_map(|iface| {
+            match iface.addr {
+                IfAddr::V4(v4) => {
+                    let ip = v4.ip;
+                    // exclude localhost by address
+                    if ip.is_loopback() { return None; }
+                    Some(ip)
+                }
+                _ => None,
+            }
+        })
+        .collect();
+
+    // Deduplicate (interfaces can expose the same IP via aliases)
+    ips.sort_unstable();
+    ips.dedup();
+
+    Ok(ips)
+}
+
 
 fn state_file_path(ais_name: &str) -> PathType {
     PathType::Content(format!("/tmp/.{}.state", ais_name))

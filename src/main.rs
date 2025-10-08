@@ -12,13 +12,10 @@ use artisan_middleware::{
 use std::time::Duration;
 use tokio::process::Command;
 
+use crate::{definitions::VerificationEntry, functions::generate_safe_client_runner_list};
 use crate::{
     definitions::{self as defs, ARTISAN_BIN_DIR, CRITICAL_APPLICATIONS},
     scripts::build_runner_binary,
-};
-use crate::{
-    definitions::VerificationEntry,
-    functions::generate_safe_client_runner_list,
 };
 use crate::{
     functions::{monitor_application_states, verify_path},
@@ -47,31 +44,41 @@ async fn main() -> Result<(), ErrorArrayItem> {
     // // Validate the artisan library and the source code for all the applications are present
     // // /opt/artisan/apps/ais_gitmon /opt/artisan/apps/ais_manager /opt/artisan/apps/ais_runner /opt/artisan/apps/ais_welcome
 
-    // Validate the scripts are there and the match the checksums we created
-    // /opt/artisan/scripts/build_runner.sh /opt/artisan/scripts/build.sh
+    // // Validate the scripts are there and the match the checksums we created
+    // // /opt/artisan/scripts/build_runner.sh /opt/artisan/scripts/build.sh
 
-    let application_status_store = defs::new_application_status_store();
+    let system_application_status_store = defs::new_system_application_status_store();
+    let client_application_status_store = defs::new_client_application_status_store();
     let build_status_store = defs::new_build_status_store();
     let verification_status_store = defs::new_verification_status_store();
     let system_information_store = defs::new_system_information_store();
     let system_process_store = defs::new_child_process_array();
 
     {
-        let status_store = application_status_store.clone();
+        let system_status_store = system_application_status_store.clone();
+        let client_status_store = client_application_status_store.clone();
         let process_store = system_process_store.clone();
         tokio::spawn(async move {
-            monitor_application_states(status_store, process_store, Duration::from_secs(5)).await;
+            monitor_application_states(
+                system_status_store,
+                client_status_store,
+                process_store,
+                Duration::from_secs(5),
+            )
+            .await;
         });
     }
 
     {
-        let app_store = application_status_store.clone();
+        let system_store = system_application_status_store.clone();
+        let client_store = client_application_status_store.clone();
         let build_store = build_status_store.clone();
         let verification_store = verification_status_store.clone();
         let system_info_store = system_information_store.clone();
         tokio::spawn(async move {
             if let Err(err) = grpc::serve_watchdog(
-                app_store,
+                system_store,
+                client_store,
                 build_store,
                 verification_store,
                 system_info_store,
@@ -255,68 +262,56 @@ async fn main() -> Result<(), ErrorArrayItem> {
         info.system_apps_initialized = true;
     }
 
-    '_spawning_client_applications: {
+    // Shared list reused for build + spawn so we don't drift between passes.
+    let client_applications = match generate_safe_client_runner_list().await {
+        Ok(data) => data,
+        Err(err) => {
+            log!(
+                LogLevel::Error,
+                "Failed to compile safe runner list: {}",
+                err.err_mesg
+            );
+            Vec::new()
+        }
+    };
+
+    '_building_client_runners: {
         log!(LogLevel::Info, "Building client runners");
-        match generate_safe_client_runner_list().await {
-            Ok(runner_list) => {
-                for runner in runner_list {
-                    log!(LogLevel::Info, "Building: {}!", runner);
-                    match build_runner_binary(&runner) {
-                        Ok(_) => log!(LogLevel::Info, "Built: {}!", runner),
-                        Err(err) => {
-                            log!(
-                                LogLevel::Error,
-                                "Failed to build: {}:{}.\nAttempting fallback",
-                                runner,
-                                err.err_mesg
-                            );
-                            if let Err(err) = revert_to_vetted(&runner) {
-                                log!(
-                                    LogLevel::Error,
-                                    "Failed to fallback for {}: {}",
-                                    runner,
-                                    err.err_mesg
-                                );
-                                // sending email to admins
-                            }
-                        }
-                    }
-                }
-            }
-            Err(_err) => {
+
+        for runner in &client_applications {
+            log!(LogLevel::Info, "Building: {}!", runner);
+            if let Err(err) = build_runner_binary(runner) {
                 log!(
                     LogLevel::Error,
-                    "Horrific error, We couldn't parse a safe runners list. no runners have been built"
+                    "Failed to build: {}:{}. Attempting fallback",
+                    runner,
+                    err.err_mesg
                 );
-                // add section to send a email here. or kys and let the system reset
+                if let Err(err) = revert_to_vetted(runner) {
+                    log!(
+                        LogLevel::Error,
+                        "Failed to fallback for {}: {}",
+                        runner,
+                        err.err_mesg
+                    );
+                }
+            } else {
+                log!(LogLevel::Info, "Built: {}!", runner);
             }
         }
+
         log!(LogLevel::Info, "Built all client runners");
     }
 
-    '_spawning_client_applications: {
+    '_starting_client_applications: {
         log!(LogLevel::Info, "Starting client application spawning");
 
-        let client_applications_names = match generate_safe_client_runner_list().await {
-            Ok(data) => data,
-            Err(_err) => {
-                log!(
-                    LogLevel::Error,
-                    "Horrific error, We couldn't parse a safe runners list. no runners have been built"
-                );
-                // add section to send a email here. or kys and let the system reset
-                Vec::new()
-            }
-        };
-
-        // Spawning the validated list of applications
-        for client_app in client_applications_names {
+        for client_app in &client_applications {
             let binary_path = PathType::Content(format!("{}/{}", ARTISAN_BIN_DIR, client_app));
             // let working_dir = PathType::Content(format!("/etc/{}", client_app));    This is the production value
             // let working_dir = PathType::Content(format!("/opt/artisan/apps/{}", client_app));  This is the production value
             let working_dir = PathType::Content(format!("/tmp"));
 
-            // assembling command
             let mut command = Command::new(binary_path);
             match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
                 Ok(mut child) => {
@@ -345,11 +340,12 @@ async fn main() -> Result<(), ErrorArrayItem> {
                             );
                         }
                     }
+
                     child.monitor_stdx().await;
                     child.monitor_usage().await;
                     if let Ok(mut store) = system_process_store.try_write().await {
                         store.insert(
-                            client_app.to_string(),
+                            client_app.clone(),
                             definitions::SupervisedProcesses::Child(child),
                         );
                     }
@@ -365,25 +361,22 @@ async fn main() -> Result<(), ErrorArrayItem> {
     }
 
     loop {}
-    // Start building for essentials systems
-    // ais_manager, ais_gitmon, ais_mailler?
+    // // Start building for essentials systems
+    // // ais_manager, ais_gitmon, ais_mailler?
 
-    // Start manager in it's own process group
-    // check the status file to ensure we spawned
+    // // Start manager in it's own process group
+    // // check the status file to ensure we spawned
 
-    // Start gitmon in it's own process group
-    // check the status file to ensure we spawned
+    // // Start gitmon in it's own process group
+    // // check the status file to ensure we spawned
 
-    // Start mailler in it's own process group
-    // check the status file to ensure it spawned
-
-    // create threads to parse the statefiles on occasion
-    // watching for and storing warning / errors and catching crashes
-
-    // run cargo clean in all of the system directories
-
-    // Start spawning and monitoring client applications,
+    // // Start mailler in it's own process group
+    // // check the status file to ensure it spawned
 
     // create threads to parse the statefiles on occasion
     // watching for and storing warning / errors and catching crashes
+
+    // // run cargo clean in all of the system directories
+
+    // // Start spawning and monitoring client applications,
 }

@@ -24,7 +24,8 @@ use proto::{
 };
 
 pub async fn serve_watchdog(
-    application_status_store: definitions::ApplicationStatusStore,
+    system_application_status_store: definitions::SystemApplicationStatusStore,
+    client_application_status_store: definitions::ClientApplicationStatusStore,
     build_status_store: definitions::BuildStatusStore,
     verification_status_store: definitions::VerificationStatusStore,
     system_information_store: definitions::SystemInformationStore,
@@ -41,7 +42,8 @@ pub async fn serve_watchdog(
     let incoming = UnixListenerStream::new(listener);
 
     let service = WatchdogService::new(
-        application_status_store,
+        system_application_status_store,
+        client_application_status_store,
         build_status_store,
         verification_status_store,
         system_information_store,
@@ -62,7 +64,8 @@ pub async fn serve_watchdog(
 }
 
 struct WatchdogService {
-    application_status_store: definitions::ApplicationStatusStore,
+    system_application_status_store: definitions::SystemApplicationStatusStore,
+    client_application_status_store: definitions::ClientApplicationStatusStore,
     build_status_store: definitions::BuildStatusStore,
     verification_status_store: definitions::VerificationStatusStore,
     system_information_store: definitions::SystemInformationStore,
@@ -70,13 +73,15 @@ struct WatchdogService {
 
 impl WatchdogService {
     fn new(
-        application_status_store: definitions::ApplicationStatusStore,
+        system_application_status_store: definitions::SystemApplicationStatusStore,
+        client_application_status_store: definitions::ClientApplicationStatusStore,
         build_status_store: definitions::BuildStatusStore,
         verification_status_store: definitions::VerificationStatusStore,
         system_information_store: definitions::SystemInformationStore,
     ) -> Self {
         Self {
-            application_status_store,
+            system_application_status_store,
+            client_application_status_store,
             build_status_store,
             verification_status_store,
             system_information_store,
@@ -90,16 +95,29 @@ impl Watchdog for WatchdogService {
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<ApplicationStatusList>, Status> {
-        let store = self.application_status_store.read().await;
-        let mut entries: Vec<(String, ApplicationStatus)> = store
-            .iter()
-            .map(|(name, status)| (name.clone(), status.clone()))
-            .collect();
-        drop(store);
+        let mut combined: Vec<(String, ApplicationStatus)> = Vec::new();
 
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        {
+            let system_store = self.system_application_status_store.read().await;
+            combined.extend(
+                system_store
+                    .iter()
+                    .map(|(name, status)| (name.clone(), status.clone())),
+            );
+        }
 
-        let applications = entries
+        {
+            let client_store = self.client_application_status_store.read().await;
+            combined.extend(
+                client_store
+                    .iter()
+                    .map(|(name, status)| (name.clone(), status.clone())),
+            );
+        }
+
+        combined.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let applications = combined
             .into_iter()
             .map(|(name, status)| application_status_to_proto(name, &status))
             .collect();
@@ -112,19 +130,29 @@ impl Watchdog for WatchdogService {
         request: Request<ApplicationStatusRequest>,
     ) -> Result<Response<ApplicationStatusResponse>, Status> {
         let name = request.into_inner().name;
-        let store = self.application_status_store.read().await;
-        let result = store.get(&name).cloned();
-        drop(store);
+        let result = {
+            let system_store = self.system_application_status_store.read().await;
+            let result = system_store.get(&name).cloned();
+            drop(system_store);
 
-        let response = match result {
-            Some(status) => ApplicationStatusResponse {
+            if result.is_some() {
+                result
+            } else {
+                let client_store = self.client_application_status_store.read().await;
+                client_store.get(&name).cloned()
+            }
+        };
+
+        let response = if let Some(status) = result {
+            ApplicationStatusResponse {
                 found: true,
                 status: Some(application_status_to_proto(name, &status)),
-            },
-            None => ApplicationStatusResponse {
+            }
+        } else {
+            ApplicationStatusResponse {
                 found: false,
                 status: None,
-            },
+            }
         };
 
         Ok(Response::new(response))
