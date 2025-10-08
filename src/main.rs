@@ -197,8 +197,8 @@ async fn main() -> Result<(), ErrorArrayItem> {
         for app in system_app_array {
             if app.canonical != "welcome" {
                 let binary_path = PathType::Content(format!("{}/{}", ARTISAN_BIN_DIR, app.ais));
-                // let working_dir = PathType::Content(format!("/etc/{}", app.ais));    This is the production value
-                let working_dir = PathType::Content(format!("/opt/artisan/apps/{}", app.ais));
+                let working_dir = PathType::Content(format!("/etc/{}", app.ais));    //This is the production value
+                // let working_dir = PathType::Content(format!("/opt/artisan/apps/{}", app.ais));
 
                 // assembling command
                 let mut command = Command::new(binary_path);
@@ -308,9 +308,9 @@ async fn main() -> Result<(), ErrorArrayItem> {
 
         for client_app in &client_applications {
             let binary_path = PathType::Content(format!("{}/{}", ARTISAN_BIN_DIR, client_app));
-            // let working_dir = PathType::Content(format!("/etc/{}", client_app));    This is the production value
-            // let working_dir = PathType::Content(format!("/opt/artisan/apps/{}", client_app));  This is the production value
-            let working_dir = PathType::Content(format!("/tmp"));
+            let working_dir = PathType::Content(format!("/etc/{}", client_app));   // This is the production value
+            // let working_dir = PathType::Content(format!("/opt/artisan/apps/{}", client_app)); // This is the production value
+            // let working_dir = PathType::Content(format!("/tmp"));
 
             let mut command = Command::new(binary_path);
             match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
