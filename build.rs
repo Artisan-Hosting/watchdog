@@ -51,7 +51,7 @@ fn build_ebpf() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "signal".to_string());
             println!(
-                "cargo:warning=Failed to build eBPF object (exit code {code}); falling back to dummy tracker"
+                "cargo:warning=Failed to build eBPF object (exit code {code}); {err}. falling back to dummy tracker"
             );
         }
         Err(err) => {
