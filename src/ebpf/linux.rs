@@ -62,15 +62,15 @@ impl BandwidthTracker {
 
             let kprobe: &mut KProbe = program
                 .try_into()
-                .map_err(|err: ErrorArrayItem| ErrorArrayItem::new(Errors::GeneralError, err.to_string()))?;
+                .map_err(|err: ProgramError| ErrorArrayItem::new(Errors::GeneralError, err.to_string()))?;
 
             kprobe
                 .load()
-                .map_err(|err: ErrorArrayItem| ErrorArrayItem::new(Errors::GeneralError, err.to_string()))?;
+                .map_err(|err: ProgramError| ErrorArrayItem::new(Errors::GeneralError, err.to_string()))?;
 
             kprobe
                 .attach(attach_point, 0)
-                .map_err(|err: ErrorArrayItem| ErrorArrayItem::new(Errors::GeneralError, err.to_string()))?;
+                .map_err(|err: ProgramError| ErrorArrayItem::new(Errors::GeneralError, err.to_string()))?;
 
             log!(
                 LogLevel::Debug,
