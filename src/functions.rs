@@ -945,97 +945,88 @@ pub async fn reload_application_stub(
 
 pub async fn rebuild_application_stub(
     application: &str,
-    stores: &[ProcessStoreHandle],
+    _stores: &[ProcessStoreHandle],
 ) -> Result<CommandStubResult, ErrorArrayItem> {
-    match take_process_by_name(application, stores).await? {
-        Some((handle, _)) => {
-            let origin = handle.kind();
-
-            // Graceful stop first
-            let _ = stop_application_stub(application, stores).await?;
-
-            // Proceed with build as before...
-            match origin {
-                ProcessStoreKind::System => match build_application(application) {
-                    Ok(_) => log!(LogLevel::Info, "Built: {}!", application),
-                    Err(err) => {
-                        log!(
-                            LogLevel::Error,
-                            "Failed to build {}: {}",
-                            application,
-                            err.err_mesg
-                        );
-                        if let Err(fallback_err) = revert_to_vetted(application) {
-                            log!(
-                                LogLevel::Error,
-                                "Failed to fall back to earlier version: {}",
-                                fallback_err.err_mesg
-                            );
-                        }
-                    }
-                },
-                ProcessStoreKind::Client => {
-                    let client_applications = match generate_safe_client_runner_list().await {
-                        Ok(data) => data,
-                        Err(err) => {
-                            log!(
-                                LogLevel::Error,
-                                "Failed to compile safe runner list: {}",
-                                err.err_mesg
-                            );
-                            Vec::new()
-                        }
-                    };
-                    if !client_applications.contains(&application.to_string()) {
-                        return Ok(CommandStubResult::new(
-                            true,
-                            format!(
-                                "[stub] rebuild command located {application} in {origin} registry; SECURITY VIOLATION",
-                            ),
-                        ));
-                    }
-                    log!(LogLevel::Info, "Building: {}!", application);
-                    if let Err(err) = build_runner_binary(application) {
-                        log!(
-                            LogLevel::Error,
-                            "Failed to build: {}:{}. Attempting fallback",
-                            application,
-                            err.err_mesg
-                        );
-                        if let Err(err) = revert_to_vetted(application) {
-                            log!(
-                                LogLevel::Error,
-                                "Failed to fallback for {}: {}",
-                                application,
-                                err.err_mesg
-                            );
-                        }
-                    } else {
-                        log!(LogLevel::Info, "Built: {}!", application);
-                    }
-                }
-                ProcessStoreKind::Custom(desc) => {
-                    return Ok(CommandStubResult::new(
-                        true,
-                        format!(
-                            "[stub] rebuild command located {application} in {origin} registry; Unimplemented: {}",
-                            desc
-                        ),
-                    ));
-                }
+    if definitions::CRITICAL_APPLICATIONS
+        .iter()
+        .any(|system_app| system_app.ais == application)
+    {
+        return match build_application(application) {
+            Ok(_) => {
+                log!(
+                    LogLevel::Info,
+                    "Rebuilt critical application: {}",
+                    application
+                );
+                Ok(CommandStubResult::new(
+                    true,
+                    format!("[stub] rebuild command completed for system app {application}"),
+                ))
             }
+            Err(err) => {
+                log!(
+                    LogLevel::Error,
+                    "Failed to rebuild system app {}: {}",
+                    application,
+                    err.err_mesg
+                );
+                if let Err(fallback_err) = revert_to_vetted(application) {
+                    log!(
+                        LogLevel::Error,
+                        "Failed to fall back to vetted binary for {}: {}",
+                        application,
+                        fallback_err.err_mesg
+                    );
+                }
+                Ok(CommandStubResult::new(
+                    false,
+                    format!(
+                        "[stub] rebuild command failed for system app {application}: {}",
+                        err.err_mesg
+                    ),
+                ))
+            }
+        };
+    }
 
-            // Then restart it
-            let _ = start_application_stub(application, stores).await?;
+    let client_applications = generate_safe_client_runner_list().await?;
+    if !client_applications.contains(&application.to_string()) {
+        return Ok(CommandStubResult::new(
+            false,
+            format!(
+                "[stub] rebuild command rejected for {application}; application is not in the vetted client runner list"
+            ),
+        ));
+    }
 
+    log!(LogLevel::Info, "Rebuilding client runner: {}", application);
+    match build_runner_binary(application) {
+        Ok(_) => Ok(CommandStubResult::new(
+            true,
+            format!("[stub] rebuild command completed for client app {application}"),
+        )),
+        Err(err) => {
+            log!(
+                LogLevel::Error,
+                "Failed to rebuild client app {}: {}",
+                application,
+                err.err_mesg
+            );
+            if let Err(fallback_err) = revert_to_vetted(application) {
+                log!(
+                    LogLevel::Error,
+                    "Failed to fallback to vetted binary for {}: {}",
+                    application,
+                    fallback_err.err_mesg
+                );
+            }
             Ok(CommandStubResult::new(
-                true,
-                format!("[stub] rebuild command located {application} in {origin} registry; OK"),
+                false,
+                format!(
+                    "[stub] rebuild command failed for client app {application}: {}",
+                    err.err_mesg
+                ),
             ))
         }
-        None => Ok(CommandStubResult::new(
-            false,
-            format!("[stub] rebuild command could not find {application} in any process registry"),
-        )),
     }
 }
