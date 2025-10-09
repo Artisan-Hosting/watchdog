@@ -29,7 +29,7 @@ pub mod grpc;
 pub mod pid_persistence;
 pub mod scripts;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), ErrorArrayItem> {
     //  Create / Define state data for the system as we initialize everything
     //// define shape for verification status

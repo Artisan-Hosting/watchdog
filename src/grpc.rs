@@ -1,4 +1,4 @@
-use std::{fmt::Write, io::ErrorKind};
+use std::{fmt::Write, io::ErrorKind, time::Duration};
 
 use artisan_middleware::dusa_collection_utils::{
     core::{logger::LogLevel, types::rb::RollingBuffer},
@@ -62,6 +62,8 @@ pub async fn serve_watchdog(
     );
 
     Server::builder()
+        .timeout(Duration::from_secs(120))
+        .concurrency_limit_per_connection(64)
         .add_service(WatchdogServer::new(service))
         .serve_with_incoming(incoming)
         .await?;
