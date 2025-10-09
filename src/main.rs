@@ -31,14 +31,6 @@ pub mod scripts;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), ErrorArrayItem> {
-    //  Create / Define state data for the system as we initialize everything
-    //// define shape for verification status
-    //// define shape for build status for each application / include if we failed and are running the vetted versions
-    // define the shape for the  current running status / memory / cpu and warning / error information for the applications
-    // define a small language that covers the following
-    // controls applications. start / stop / reload
-    // status, can return it's building / running
-
     let system_application_status_store = defs::new_system_application_status_store();
     let client_application_status_store = defs::new_client_application_status_store();
     let build_status_store = defs::new_build_status_store();
@@ -246,13 +238,6 @@ async fn main() -> Result<(), ErrorArrayItem> {
                                 definitions::SupervisedProcesses::Child(child),
                             );
                         }
-                        //  ! LEAVE COMMENTED
-                        // state.data = format!(
-                        //     "{} started, with working dir: {}",
-                        //     system_app.0, config_path
-                        // );
-                        // state.event_counter += 1;
-                        // save_state(state, state_path).await?;
                     }
                     Err(err) => {
                         log!(LogLevel::Error, "Failed to spawn: {}: {}", app.ais, err);
@@ -386,6 +371,4 @@ async fn main() -> Result<(), ErrorArrayItem> {
     }
 
     loop {}
-    // create threads to parse the statefiles on occasion
-    // watching for and storing warning / errors and catching crashes
 }

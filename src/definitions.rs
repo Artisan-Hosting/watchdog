@@ -104,9 +104,9 @@ impl ApplicationIdentifiers {
 }
 
 /// Critical application definitions, including both canonical and AIS-qualified identifiers.
-pub const CRITICAL_APPLICATIONS: [ApplicationIdentifiers; 3] = [
+pub const CRITICAL_APPLICATIONS: [ApplicationIdentifiers; 2] = [
     ApplicationIdentifiers::new(APP_MANAGER, AIS_MANAGER),
-    ApplicationIdentifiers::new(APP_GITMON, AIS_GITMON),
+    // ApplicationIdentifiers::new(APP_GITMON, AIS_GITMON),
     ApplicationIdentifiers::new(APP_MAILLER, AIS_MAILLER),
     // ApplicationIdentifiers::new(APP_WELCOME, AIS_WELCOME),
 ];
