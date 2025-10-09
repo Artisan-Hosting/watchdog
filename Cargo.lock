@@ -73,6 +73,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ais_watchdog"
+version = "1.0.0"
+dependencies = [
+ "artisan_middleware",
+ "aya",
+ "bytemuck",
+ "chrono",
+ "get_if_addrs",
+ "nix 0.29.0",
+ "once_cell",
+ "prost",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3368,26 +3388,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bad67dc8b2a1a6e5448428adec4c3e84c43e561d8c9ee8a9e5aabeb193ec41d1"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "watchdog"
-version = "0.1.0"
-dependencies = [
- "artisan_middleware",
- "aya",
- "bytemuck",
- "chrono",
- "get_if_addrs",
- "nix 0.29.0",
- "once_cell",
- "prost",
- "serde",
- "serde_json",
- "tokio",
- "tokio-stream",
- "tonic",
- "tonic-build",
 ]
 
 [[package]]
