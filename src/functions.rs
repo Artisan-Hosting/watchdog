@@ -668,13 +668,13 @@ pub fn configure_www_data_command(command: &mut Command) {
     command.env("NVM_DIR", WWW_DATA_NVM_DIR);
     command.env("SHELL", "/bin/bash");
 
-    let nvm_bin = format!("{}/bin", WWW_DATA_NVM_DIR);
-    let node_bin = format!("{}/versions/node/current/bin", WWW_DATA_NVM_DIR);
+    // let nvm_bin = format!("{}/bin", WWW_DATA_NVM_DIR);
+    let node_bin = format!("{}/versions/node/v23.5.0/bin", WWW_DATA_NVM_DIR);
 
     let existing_path = env::var("PATH").unwrap_or_else(|_| DEFAULT_PATH.to_string());
     let mut segments = Vec::new();
     segments.push(node_bin);
-    segments.push(nvm_bin);
+    // segments.push(nvm_bin);
     segments.push(existing_path);
     let combined_path = segments.join(":");
     command.env("PATH", combined_path);
