@@ -321,13 +321,12 @@ async fn main() -> Result<(), ErrorArrayItem> {
             // let working_dir = PathType::Content(format!("/tmp"));
 
             // uhhhhhh
-            if let Err(err) = chown(&binary_path, Some(33), Some(33)){
+            if let Err(err) = chown(&binary_path, Some(33), Some(33)) {
                 log!(LogLevel::Error, "Failed to chown: {}", err.to_string())
             };
 
             let mut command = Command::new(binary_path);
-            command.uid(33);
-            command.gid(33);
+            crate::functions::configure_www_data_command(&mut command);
             match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
                 Ok(mut child) => {
                     let pid_result = child.get_pid().await;

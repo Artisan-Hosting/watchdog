@@ -19,7 +19,7 @@ use nix::sys::signal::{
 use nix::unistd::Pid;
 use std::{
     collections::{HashMap, HashSet},
-    fmt, fs, io,
+    env, fmt, fs, io,
     net::Ipv4Addr,
     time::Duration,
 };
@@ -27,7 +27,8 @@ use tokio::{process::Command, time};
 
 use crate::{
     definitions::{
-        self, ApplicationIdentifiers, ApplicationStatus, SupervisedProcesses, VerificationEntry, ARTISAN_BIN_DIR, CRITICAL_APPLICATIONS, GIT_CONFIG_PATH
+        self, ARTISAN_BIN_DIR, ApplicationIdentifiers, ApplicationStatus, CRITICAL_APPLICATIONS,
+        GIT_CONFIG_PATH, SupervisedProcesses, VerificationEntry,
     },
     ebpf,
     scripts::{build_application, build_runner_binary, revert_to_vetted},
@@ -46,6 +47,13 @@ const VERIFICATION_MATRIX: [(&str, &str, Option<&str>); 2] = [
         None, // don't check, just verify the file exists
     ),
 ];
+
+const WWW_DATA_USER: &str = "www-data";
+const WWW_DATA_HOME: &str = "/var/www";
+const WWW_DATA_NVM_DIR: &str = "/var/www/.nvm";
+const WWW_DATA_UID: u32 = 33;
+const WWW_DATA_GID: u32 = 33;
+const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 pub fn verify_path(path: PathType) -> Result<VerificationEntry, ErrorArrayItem> {
     let mut verification_entry = VerificationEntry::new();
@@ -650,6 +658,28 @@ impl CommandStubResult {
     }
 }
 
+pub fn configure_www_data_command(command: &mut Command) {
+    command.uid(WWW_DATA_UID);
+    command.gid(WWW_DATA_GID);
+
+    command.env("HOME", WWW_DATA_HOME);
+    command.env("USER", WWW_DATA_USER);
+    command.env("LOGNAME", WWW_DATA_USER);
+    command.env("NVM_DIR", WWW_DATA_NVM_DIR);
+    command.env("SHELL", "/bin/bash");
+
+    let nvm_bin = format!("{}/bin", WWW_DATA_NVM_DIR);
+    let node_bin = format!("{}/versions/node/current/bin", WWW_DATA_NVM_DIR);
+
+    let existing_path = env::var("PATH").unwrap_or_else(|_| DEFAULT_PATH.to_string());
+    let mut segments = Vec::new();
+    segments.push(node_bin);
+    segments.push(nvm_bin);
+    segments.push(existing_path);
+    let combined_path = segments.join(":");
+    command.env("PATH", combined_path);
+}
+
 // #[derive(Clone, Copy)]
 // enum CommandAction {
 //     Start,
@@ -721,6 +751,7 @@ async fn start_with_handle(
     }
 
     let mut command = Command::new(binary_path);
+    configure_www_data_command(&mut command);
     match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
         Ok(mut child) => {
             if let Ok(pid) = child.get_pid().await {
