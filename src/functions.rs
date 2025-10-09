@@ -704,6 +704,10 @@ pub async fn start_application_stub(
     application: &str,
     stores: &[ProcessStoreHandle],
 ) -> Result<CommandStubResult, ErrorArrayItem> {
+    let is_system_app = definitions::CRITICAL_APPLICATIONS
+        .iter()
+        .any(|system_app| system_app.ais == application);
+
     // Try to find existing handle
     let handle = match take_process_by_name(application, stores).await {
         Ok(Some((handle, _stale_process))) => {
@@ -718,23 +722,34 @@ pub async fn start_application_stub(
             handle
         }
         Ok(None) => {
-            // Fallback to first writable store
-            let default_handle = stores.iter().find(|s| s.is_writable()).ok_or_else(|| {
-                ErrorArrayItem::new(Errors::NotFound, "No writable store available")
-            })?;
-            default_handle.clone()
+            // Pick preferred store based on application type
+            let preferred_kind = if is_system_app {
+                ProcessStoreKind::System
+            } else {
+                ProcessStoreKind::Client
+            };
+
+            if let Some(target) = stores.iter().find(|store| store.kind() == preferred_kind) {
+                target.clone()
+            } else {
+                let default_handle = stores.iter().find(|s| s.is_writable()).ok_or_else(|| {
+                    ErrorArrayItem::new(Errors::NotFound, "No writable store available")
+                })?;
+                default_handle.clone()
+            }
         }
         Err(err) => return Err(err),
     };
 
     // Now perform the actual spawn
-    start_with_handle(application, handle).await
+    start_with_handle(application, handle, is_system_app).await
 }
 
 /// Helper: launches the process using the provided handle
 async fn start_with_handle(
     application: &str,
     handle: ProcessStoreHandle,
+    is_system_app: bool,
 ) -> Result<CommandStubResult, ErrorArrayItem> {
     let origin = handle.kind();
     let binary_path = PathType::Content(format!("{}/{}", ARTISAN_BIN_DIR, application));
@@ -751,7 +766,9 @@ async fn start_with_handle(
     }
 
     let mut command = Command::new(binary_path);
-    configure_www_data_command(&mut command);
+    if !is_system_app {
+        configure_www_data_command(&mut command);
+    }
     match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
         Ok(mut child) => {
             if let Ok(pid) = child.get_pid().await {
