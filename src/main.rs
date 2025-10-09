@@ -9,7 +9,7 @@ use artisan_middleware::{
     },
     process_manager::spawn_complex_process,
 };
-use std::time::Duration;
+use std::{os::unix::fs::chown, time::Duration};
 use tokio::process::Command;
 
 use crate::{definitions::VerificationEntry, functions::generate_safe_client_runner_list};
@@ -319,6 +319,11 @@ async fn main() -> Result<(), ErrorArrayItem> {
             let working_dir = PathType::Content(format!("/etc/{}", client_app)); // This is the production value
             // let working_dir = PathType::Content(format!("/opt/artisan/apps/{}", client_app)); // This is the production value
             // let working_dir = PathType::Content(format!("/tmp"));
+
+            // uhhhhhh
+            if let Err(err) = chown(&binary_path, Some(33), Some(33)){
+                log!(LogLevel::Error, "Failed to chown: {}", err.to_string())
+            };
 
             let mut command = Command::new(binary_path);
             command.uid(33);
