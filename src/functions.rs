@@ -373,7 +373,11 @@ async fn refresh_system_statuses_once(
     status_store: &definitions::SystemApplicationStatusStore,
     process_store: &definitions::ChildProcessArray,
 ) -> Result<(), ErrorArrayItem> {
+    let mut known_names: HashSet<String> = HashSet::new();
+    let mut new_statuses: HashMap<String, ApplicationStatus> = HashMap::new();
+
     for app in definitions::CRITICAL_APPLICATIONS.iter() {
+        known_names.insert(app.ais.to_string());
         let state = load_state_snapshot(app).await;
         if let Some(ref snapshot) = state {
             if let Err(err) =
@@ -394,8 +398,71 @@ async fn refresh_system_statuses_once(
         let app_status = merge_state_and_observations(state, observations, true)
             .expect("system applications should always produce a status");
 
+        new_statuses.insert(app.ais.to_string(), app_status);
+    }
+
+    if let Ok(dir) = fs::read_dir("/tmp") {
+        for entry in dir.flatten() {
+            let file_name_os = entry.file_name();
+            let Some(file_name) = file_name_os.to_str() else {
+                continue;
+            };
+
+            if !file_name.starts_with('.') || !file_name.ends_with(".state") {
+                continue;
+            }
+
+            let ais_name = &file_name[1..file_name.len() - 6];
+
+            if known_names.contains(ais_name) {
+                continue;
+            }
+
+            if let Some(state) = load_state_snapshot_by_name(ais_name).await {
+                if !state.system_application {
+                    clear_last_seen_pid(ais_name).await;
+                    continue;
+                }
+
+                if let Err(err) =
+                    reconcile_process_store_with_state(process_store, ais_name, &state).await
+                {
+                    log!(
+                        LogLevel::Warn,
+                        "Failed to reconcile state for {}: {}",
+                        ais_name,
+                        err.err_mesg
+                    );
+                }
+
+                let observations = match collect_process_observations(process_store, ais_name).await
+                {
+                    Ok(observations) => observations,
+                    Err(err) => {
+                        log!(
+                            LogLevel::Warn,
+                            "Failed to collect observations for {}: {}",
+                            ais_name,
+                            err.err_mesg
+                        );
+                        continue;
+                    }
+                };
+
+                if let Some(status) = merge_state_and_observations(Some(state), observations, true)
+                {
+                    new_statuses.insert(ais_name.to_string(), status);
+                    known_names.insert(ais_name.to_string());
+                }
+            } else {
+                clear_last_seen_pid(ais_name).await;
+            }
+        }
+    }
+
+    {
         let mut store = status_store.write().await;
-        store.insert(app.ais.to_string(), app_status);
+        *store = new_statuses;
     }
 
     Ok(())
