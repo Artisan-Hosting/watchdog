@@ -8,7 +8,7 @@ use artisan_middleware::{
         log,
     },
     git_actions::GitCredentials,
-    process_manager::spawn_complex_process,
+    process_manager::{SupervisedProcess, spawn_complex_process},
     state_persistence::{AppState, StatePersistence},
 };
 use get_if_addrs::{IfAddr, get_if_addrs};
@@ -17,13 +17,15 @@ use nix::sys::signal::{
     kill,
 };
 use nix::unistd::Pid;
+use once_cell::sync::Lazy;
 use std::{
     collections::{HashMap, HashSet},
+    convert::TryFrom,
     env, fmt, fs, io,
     net::Ipv4Addr,
     time::Duration,
 };
-use tokio::{process::Command, task, time};
+use tokio::{process::Command, sync::Mutex, task, time};
 
 use crate::{
     definitions::{
@@ -54,6 +56,9 @@ const WWW_DATA_NVM_DIR: &str = "/var/www/.nvm";
 const WWW_DATA_UID: u32 = 33;
 const WWW_DATA_GID: u32 = 33;
 const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+static LAST_SEEN_STATE_PIDS: Lazy<Mutex<HashMap<String, u32>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub fn verify_path(path: PathType) -> Result<VerificationEntry, ErrorArrayItem> {
     let mut verification_entry = VerificationEntry::new();
@@ -235,12 +240,155 @@ pub async fn monitor_application_states(
     }
 }
 
+fn is_system_application_name(name: &str) -> bool {
+    definitions::CRITICAL_APPLICATIONS
+        .iter()
+        .any(|system_app| system_app.ais == name)
+}
+
+async fn update_last_seen_pid(name: &str, pid: Option<u32>) {
+    let mut guard = LAST_SEEN_STATE_PIDS.lock().await;
+    match pid {
+        Some(pid) => {
+            guard.insert(name.to_string(), pid);
+        }
+        None => {
+            guard.remove(name);
+        }
+    }
+}
+
+async fn clear_last_seen_pid(name: &str) {
+    update_last_seen_pid(name, None).await;
+}
+
+fn should_track_state(state: &AppState) -> bool {
+    matches!(
+        state.status,
+        artisan_middleware::aggregator::Status::Running
+            | artisan_middleware::aggregator::Status::Starting
+            | artisan_middleware::aggregator::Status::Idle
+            | artisan_middleware::aggregator::Status::Warning
+    )
+}
+
+async fn reconcile_process_store_with_state(
+    process_store: &definitions::ChildProcessArray,
+    name: &str,
+    state: &AppState,
+) -> Result<(), ErrorArrayItem> {
+    if !should_track_state(state) || state.pid == 0 {
+        clear_last_seen_pid(name).await;
+        return Ok(());
+    }
+
+    let desired_pid = state.pid;
+
+    let last_seen_pid = {
+        let guard = LAST_SEEN_STATE_PIDS.lock().await;
+        guard.get(name).copied()
+    };
+
+    let entry_exists = {
+        let guard = process_store.try_read().await?;
+        guard.contains_key(name)
+    };
+
+    if entry_exists && last_seen_pid.is_none() {
+        update_last_seen_pid(name, Some(desired_pid)).await;
+        return Ok(());
+    }
+
+    if entry_exists && last_seen_pid == Some(desired_pid) {
+        update_last_seen_pid(name, Some(desired_pid)).await;
+        return Ok(());
+    }
+
+    let pid_i32 = match i32::try_from(desired_pid) {
+        Ok(pid) => pid,
+        Err(_) => {
+            log!(
+                LogLevel::Warn,
+                "State snapshot reported pid {} for {} but it exceeds platform limits; skipping reattachment",
+                desired_pid,
+                name
+            );
+            return Ok(());
+        }
+    };
+
+    match SupervisedProcess::new(Pid::from_raw(pid_i32)) {
+        Ok(mut proc) => {
+            proc.monitor_usage().await;
+
+            {
+                let mut guard = process_store.try_write().await?;
+                guard.insert(name.to_string(), SupervisedProcesses::Process(proc));
+            }
+
+            if let Err(err) = ebpf::register_pid(desired_pid) {
+                log!(
+                    LogLevel::Warn,
+                    "Failed to register {} (PID {}) with eBPF tracker after reattachment: {}",
+                    name,
+                    desired_pid,
+                    err.err_mesg
+                );
+            }
+
+            if let Err(err) = crate::pid_persistence::remember_process(name, desired_pid).await {
+                log!(
+                    LogLevel::Error,
+                    "Failed to persist PID {} for {} after reattachment: {}",
+                    desired_pid,
+                    name,
+                    err.err_mesg
+                );
+            }
+
+            update_last_seen_pid(name, Some(desired_pid)).await;
+
+            log!(
+                LogLevel::Info,
+                "Detected PID change for {} -> {} via state snapshot; reattached without stdout capture",
+                name,
+                desired_pid
+            );
+        }
+        Err(err) => {
+            log!(
+                LogLevel::Warn,
+                "Detected PID {} for {} in state snapshot but failed to attach supervisor: {}",
+                desired_pid,
+                name,
+                err.err_mesg
+            );
+        }
+    }
+
+    Ok(())
+}
+
 async fn refresh_system_statuses_once(
     status_store: &definitions::SystemApplicationStatusStore,
     process_store: &definitions::ChildProcessArray,
 ) -> Result<(), ErrorArrayItem> {
     for app in definitions::CRITICAL_APPLICATIONS.iter() {
         let state = load_state_snapshot(app).await;
+        if let Some(ref snapshot) = state {
+            if let Err(err) =
+                reconcile_process_store_with_state(process_store, app.ais, snapshot).await
+            {
+                log!(
+                    LogLevel::Warn,
+                    "Failed to reconcile state for {}: {}",
+                    app.ais,
+                    err.err_mesg
+                );
+            }
+        } else {
+            clear_last_seen_pid(app.ais).await;
+        }
         let observations = collect_process_observations(process_store, app.ais).await?;
 
         let app_status = merge_state_and_observations(state, observations, true)
@@ -257,29 +405,48 @@ async fn refresh_client_statuses_once(
     client_store: &definitions::ClientApplicationStatusStore,
     process_store: &definitions::ChildProcessArray,
 ) -> Result<(), ErrorArrayItem> {
-    let processes = process_store.try_read().await?;
+    let process_names: Vec<String> = {
+        let guard = process_store.try_read().await?;
+        guard
+            .keys()
+            .filter(|name| !is_system_application_name(name))
+            .cloned()
+            .collect()
+    };
+
     let mut new_statuses: HashMap<String, ApplicationStatus> = HashMap::new();
     let mut known_names: HashSet<String> = HashSet::new();
 
-    for (name, process) in processes.iter() {
-        if definitions::CRITICAL_APPLICATIONS
-            .iter()
-            .any(|system_app| system_app.ais == name)
-        {
-            continue;
-        }
-
+    for name in process_names {
         known_names.insert(name.clone());
 
-        let state = load_state_snapshot_by_name(name).await;
-        let observations = observe_supervised_process(process).await?;
+        let state = load_state_snapshot_by_name(&name).await;
+        if let Some(ref snapshot) = state {
+            if snapshot.system_application {
+                clear_last_seen_pid(&name).await;
+                continue;
+            }
+
+            if let Err(err) =
+                reconcile_process_store_with_state(process_store, &name, snapshot).await
+            {
+                log!(
+                    LogLevel::Warn,
+                    "Failed to reconcile state for {}: {}",
+                    name,
+                    err.err_mesg
+                );
+            }
+        } else {
+            clear_last_seen_pid(&name).await;
+        }
+
+        let observations = collect_process_observations(process_store, &name).await?;
 
         if let Some(status) = merge_state_and_observations(state, observations, false) {
             new_statuses.insert(name.clone(), status);
         }
     }
-
-    drop(processes);
 
     if let Ok(dir) = fs::read_dir("/tmp") {
         for entry in dir.flatten() {
@@ -290,10 +457,7 @@ async fn refresh_client_statuses_once(
 
                 let ais_name = &file_name[1..file_name.len() - 6];
 
-                if definitions::CRITICAL_APPLICATIONS
-                    .iter()
-                    .any(|system_app| system_app.ais == ais_name)
-                {
+                if is_system_application_name(ais_name) {
                     continue;
                 }
 
@@ -303,7 +467,19 @@ async fn refresh_client_statuses_once(
 
                 if let Some(state) = load_state_snapshot_by_name(ais_name).await {
                     if state.system_application {
+                        clear_last_seen_pid(ais_name).await;
                         continue;
+                    }
+
+                    if let Err(err) =
+                        reconcile_process_store_with_state(process_store, ais_name, &state).await
+                    {
+                        log!(
+                            LogLevel::Warn,
+                            "Failed to reconcile state for {}: {}",
+                            ais_name,
+                            err.err_mesg
+                        );
                     }
 
                     if let Some(status) = merge_state_and_observations(
@@ -313,6 +489,8 @@ async fn refresh_client_statuses_once(
                     ) {
                         new_statuses.insert(ais_name.to_string(), status);
                     }
+
+                    known_names.insert(ais_name.to_string());
                 }
             }
         }
