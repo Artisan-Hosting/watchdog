@@ -317,6 +317,10 @@ async fn reconcile_process_store_with_state(
         }
     };
 
+    if crate::pid_persistence::is_pid_marked_dead(desired_pid).await {
+        return Ok(());
+    }
+
     match SupervisedProcess::new(Pid::from_raw(pid_i32)) {
         Ok(mut proc) => {
             proc.monitor_usage().await;

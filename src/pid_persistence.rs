@@ -19,6 +19,8 @@ use crate::definitions::WATCHDOG_PID_LEDGER_PATH;
 
 static PID_CACHE: Lazy<tokio::sync::Mutex<HashMap<String, u32>>> =
     Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
+static FAILED_PID_RECLAIMS: Lazy<tokio::sync::Mutex<Vec<u32>>> =
+    Lazy::new(|| tokio::sync::Mutex::new(Vec::new()));
 
 /// Serializable representation of the PID ledger.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -48,9 +50,30 @@ pub async fn initialise() -> Result<(), ErrorArrayItem> {
 
 /// Records a freshly spawned process and persists the updated ledger.
 pub async fn remember_process(name: &str, pid: u32) -> Result<(), ErrorArrayItem> {
+    remove_dead_pid(pid).await;
+
     let mut cache = PID_CACHE.lock().await;
     cache.insert(name.to_string(), pid);
     persist_to_disk(&cache).await
+}
+
+pub async fn is_pid_marked_dead(pid: u32) -> bool {
+    let guard = FAILED_PID_RECLAIMS.lock().await;
+    guard.contains(&pid)
+}
+
+async fn mark_pid_dead(pid: u32) {
+    let mut guard = FAILED_PID_RECLAIMS.lock().await;
+    if !guard.contains(&pid) {
+        guard.push(pid);
+    }
+}
+
+async fn remove_dead_pid(pid: u32) {
+    let mut guard = FAILED_PID_RECLAIMS.lock().await;
+    if let Some(pos) = guard.iter().position(|&tracked| tracked == pid) {
+        guard.swap_remove(pos);
+    }
 }
 
 /// Attempts to reclaim any processes that were persisted before a crash by
@@ -65,47 +88,55 @@ pub async fn reclaim_orphan_processes() -> Result<(), ErrorArrayItem> {
         return Ok(());
     }
 
+    let mut reclaimed: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+
     for (name, pid) in entries {
+        if is_pid_marked_dead(pid).await {
+            continue;
+        }
+
         let pid_i32 = match pid.try_into() {
             Ok(value) => value,
             Err(_) => {
-                log!(
-                    LogLevel::Warn,
-                    "Persisted PID for {} does not fit in i32; skipping",
-                    name
-                );
+                mark_pid_dead(pid).await;
+                failed.push(format!("{} ({}) - pid exceeds platform limits", name, pid));
                 continue;
             }
         };
 
         match SupervisedProcess::new(Pid::from_raw(pid_i32)) {
-            Ok(mut proc) => {
-                log!(
-                    LogLevel::Info,
-                    "Terminating orphaned process {} (PID {}) from previous watchdog instance",
-                    name,
-                    pid
-                );
-                if let Err(err) = proc.kill() {
-                    log!(
-                        LogLevel::Error,
-                        "Failed to terminate orphaned process {} (PID {}): {}",
-                        name,
-                        pid,
-                        err.err_mesg
-                    );
+            Ok(mut proc) => match proc.kill() {
+                Ok(_) => {
+                    remove_dead_pid(pid).await;
+                    reclaimed.push(format!("{} ({})", name, pid));
                 }
-            }
+                Err(err) => {
+                    mark_pid_dead(pid).await;
+                    failed.push(format!("{} ({}) - {}", name, pid, err.err_mesg));
+                }
+            },
             Err(err) => {
-                log!(
-                    LogLevel::Trace,
-                    "Skipping persisted PID {} for {}: {}",
-                    pid,
-                    name,
-                    err.err_mesg
-                );
+                mark_pid_dead(pid).await;
+                failed.push(format!("{} ({}) - {}", name, pid, err.err_mesg));
             }
         }
+    }
+
+    if !reclaimed.is_empty() {
+        log!(
+            LogLevel::Info,
+            "Reclaimed orphaned processes from previous watchdog instance: {}",
+            reclaimed.join(", ")
+        );
+    }
+
+    if !failed.is_empty() {
+        log!(
+            LogLevel::Warn,
+            "Failed to reclaim orphaned processes (marked as dead): {}",
+            failed.join(", ")
+        );
     }
 
     let mut cache = PID_CACHE.lock().await;
