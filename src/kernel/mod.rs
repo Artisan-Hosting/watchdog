@@ -1,1 +1,1 @@
-mod linux;
+pub mod awdog_client;
