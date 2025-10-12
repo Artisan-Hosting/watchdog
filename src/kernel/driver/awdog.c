@@ -20,10 +20,11 @@
 #include <linux/uaccess.h>
 #include <linux/version.h>
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 16, 0)
-#define awdog_class_create(name) class_create(name)
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
+  #define awdog_class_create(name) class_create(name)
 #else
-#define awdog_class_create(name) class_create(THIS_MODULE, name)
+  #define awdog_class_create(name) class_create(THIS_MODULE, name)
 #endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
