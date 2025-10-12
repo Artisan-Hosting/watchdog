@@ -8,3 +8,5 @@ all:
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
+
+# needed to install tmp2-tss-devel on fedora

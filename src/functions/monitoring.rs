@@ -26,15 +26,14 @@ use std::{
 };
 use tokio::{process::Command, sync::Mutex, task, time};
 
+use crate::functions::inventory::generate_safe_client_runner_list;
 use crate::{
     definitions::{
-        self, ARTISAN_BIN_DIR, ApplicationIdentifiers, ApplicationStatus, CRITICAL_APPLICATIONS,
-        SupervisedProcesses,
+        self, ARTISAN_BIN_DIR, ApplicationIdentifiers, ApplicationStatus, SupervisedProcesses,
     },
     ebpf,
     scripts::{build_application, build_runner_binary, revert_to_vetted},
 };
-use crate::functions::inventory::generate_safe_client_runner_list;
 
 const WWW_DATA_USER: &str = "www-data";
 const WWW_DATA_HOME: &str = "/var/www";

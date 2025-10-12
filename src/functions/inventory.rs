@@ -1,19 +1,11 @@
 use artisan_middleware::dusa_collection_utils::{
-    core::{
-        errors::ErrorArrayItem,
-        logger::LogLevel,
-        types::pathtype::PathType,
-    },
+    core::{errors::ErrorArrayItem, logger::LogLevel, types::pathtype::PathType},
     log,
 };
 use artisan_middleware::git_actions::GitCredentials;
 use std::fs;
 
-use crate::definitions::{
-    ARTISAN_BIN_DIR,
-    CRITICAL_APPLICATIONS,
-    GIT_CONFIG_PATH,
-};
+use crate::definitions::{ARTISAN_BIN_DIR, CRITICAL_APPLICATIONS, GIT_CONFIG_PATH};
 
 /// Builds the list of client application binaries that should be built/spawned.
 /// The resulting list excludes core system processes and only includes entries

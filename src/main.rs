@@ -1,7 +1,7 @@
 use artisan_middleware::{
     dusa_collection_utils::{
         core::{
-            errors::{ErrorArray, ErrorArrayItem},
+            errors::{ErrorArray, ErrorArrayItem, Errors},
             logger::LogLevel,
             types::pathtype::PathType,
         },
@@ -9,7 +9,19 @@ use artisan_middleware::{
     },
     process_manager::spawn_complex_process,
 };
-use std::{os::unix::fs::chown, time::Duration};
+use byteorder::{LittleEndian, WriteBytesExt};
+use getrandom::getrandom;
+use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
+use nix::ioctl_write_ptr;
+use nix::unistd;
+use sha2::Sha256;
+use std::{
+    fs::OpenOptions,
+    os::{fd::AsRawFd, unix::fs::chown},
+    process, thread,
+    time::{Duration, SystemTime},
+};
 use tokio::process::Command;
 
 use crate::{definitions::VerificationEntry, functions::generate_safe_client_runner_list};
@@ -28,7 +40,6 @@ pub mod functions;
 pub mod grpc;
 pub mod pid_persistence;
 pub mod scripts;
-pub mod kernel;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), ErrorArrayItem> {
@@ -82,6 +93,21 @@ async fn main() -> Result<(), ErrorArrayItem> {
                 );
             }
         });
+    }
+
+    '_kernel_watchdog: {
+        match start_kernel_watchdog() {
+            Ok(_) => {
+                log!(LogLevel::Info, "Kernel watchdog heartbeat thread started");
+            }
+            Err(err) => {
+                log!(
+                    LogLevel::Error,
+                    "Failed to initialise kernel watchdog client: {}",
+                    err.err_mesg
+                );
+            }
+        }
     }
 
     '_hash_verification: {
@@ -372,4 +398,202 @@ async fn main() -> Result<(), ErrorArrayItem> {
     }
 
     loop {}
+}
+
+// ----- kernel watchdog client -----
+
+const AWDOG_DEV: &str = "/dev/awdog";
+const AWDOG_KEY_LEN: usize = 32;
+const AWDOG_MAC_LEN: usize = 32;
+const AWDOG_MODULE_UUID: [u8; 16] = *b"AWDOGMOD-UUIDv10";
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+struct AwdogRegister {
+    pid: u32,
+    exe_fingerprint: u64,
+    key_len: u32,
+    key: [u8; AWDOG_KEY_LEN],
+    hb_period_ms: u32,
+    hb_timeout_ms: u32,
+    session_id: u64,
+    proto_ver: u32,
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+struct AwdogHb {
+    monotonic_nonce: u64,
+    pid: u32,
+    exe_fingerprint: u64,
+    ts_ns: u64,
+    mac: [u8; AWDOG_MAC_LEN],
+}
+
+const AWDOG_IOC_MAGIC: u8 = 0xA7;
+const AWDOG_IOCTL_REGISTER_NR: u8 = 0x01;
+const AWDOG_IOCTL_UNREG_NR: u8 = 0x02;
+ioctl_write_ptr!(
+    awdog_ioctl_register,
+    AWDOG_IOC_MAGIC,
+    AWDOG_IOCTL_REGISTER_NR,
+    AwdogRegister
+);
+ioctl_write_ptr!(awdog_ioctl_unreg, AWDOG_IOC_MAGIC, AWDOG_IOCTL_UNREG_NR, u8);
+
+fn start_kernel_watchdog() -> Result<(), ErrorArrayItem> {
+    let root_k = unseal_root_k_from_tpm()?;
+    let kc = hkdf_derive_kc(&root_k, &AWDOG_MODULE_UUID);
+
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(AWDOG_DEV)
+        .map_err(ErrorArrayItem::from)?;
+    let fd = file.as_raw_fd();
+
+    println!("REGISTER ioctl number: 0x{:x}", nix::request_code_write!(AWDOG_IOC_MAGIC, AWDOG_IOCTL_REGISTER_NR, std::mem::size_of::<AwdogRegister>()));
+
+
+    let pid = process::id();
+    let exe_fp = exe_fingerprint();
+    let reg = AwdogRegister {
+        pid,
+        exe_fingerprint: exe_fp,
+        key_len: AWDOG_KEY_LEN as u32,
+        key: kc,
+        hb_period_ms: 2000,
+        hb_timeout_ms: 6000,
+        session_id: 1,
+        proto_ver: 1,
+    };
+
+    unsafe {
+        awdog_ioctl_register(fd, &reg).map_err(|err| {
+            ErrorArrayItem::new(
+                Errors::GeneralError,
+                format!("Watchdog register ioctl failed: {err}"),
+            )
+        })?;
+    }
+
+    let hb_period = Duration::from_millis(reg.hb_period_ms as u64);
+    let hb_key = reg.key;
+
+    thread::Builder::new()
+        .name("awdog-heartbeat".into())
+        .spawn(move || run_heartbeat_loop(file, hb_key, pid, exe_fp, hb_period))
+        .map_err(ErrorArrayItem::from)?;
+
+    Ok(())
+}
+
+fn run_heartbeat_loop(
+    file: std::fs::File,
+    kc: [u8; AWDOG_KEY_LEN],
+    pid: u32,
+    exe_fp: u64,
+    period: Duration,
+) {
+    let mut nonce: u64 = 1;
+
+    loop {
+        let hb = build_hb(&kc, nonce, pid, exe_fp);
+        let hb_bytes = unsafe {
+            std::slice::from_raw_parts(
+                (&hb as *const AwdogHb) as *const u8,
+                std::mem::size_of::<AwdogHb>(),
+            )
+        };
+
+        match unistd::write(&file, hb_bytes) {
+            Ok(wrote) if wrote as usize == hb_bytes.len() => {}
+            Ok(wrote) => {
+                log!(
+                    LogLevel::Warn,
+                    "Partial watchdog heartbeat write ({} of {} bytes)",
+                    wrote,
+                    hb_bytes.len()
+                );
+            }
+            Err(err) => {
+                log!(LogLevel::Error, "Watchdog heartbeat write failed: {}", err);
+                break;
+            }
+        }
+
+        nonce = nonce.wrapping_add(1);
+        thread::sleep(period);
+    }
+
+    let unreg_arg: u8 = 0;
+    unsafe {
+        if let Err(err) = awdog_ioctl_unreg(file.as_raw_fd(), &unreg_arg) {
+            log!(
+                LogLevel::Warn,
+                "Watchdog unregister ioctl failed during shutdown: {}",
+                err
+            );
+        }
+    }
+}
+
+fn hkdf_derive_kc(root_k: &[u8; AWDOG_KEY_LEN], module_uuid: &[u8; 16]) -> [u8; AWDOG_KEY_LEN] {
+    let hk = Hkdf::<Sha256>::new(None, root_k);
+    let mut okm = [0u8; AWDOG_KEY_LEN];
+    let mut info = b"artisan-watchdog v1".to_vec();
+    info.extend_from_slice(module_uuid);
+    hk.expand(&info, &mut okm)
+        .expect("hkdf expand should not fail with fixed output size");
+    okm
+}
+
+fn unseal_root_k_from_tpm() -> Result<[u8; AWDOG_KEY_LEN], ErrorArrayItem> {
+    let mut k = [0u8; AWDOG_KEY_LEN];
+    getrandom(&mut k).map_err(|err| {
+        ErrorArrayItem::new(
+            Errors::GeneralError,
+            format!("Failed to read entropy for watchdog key: {err}"),
+        )
+    })?;
+    Ok(k)
+}
+
+fn exe_fingerprint() -> u64 {
+    0xA1B2C3D4E5F60789u64
+}
+
+fn now_ns() -> u64 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+}
+
+fn hmac_mac(kc: &[u8; AWDOG_KEY_LEN], hb_no_mac: &[u8]) -> [u8; AWDOG_MAC_LEN] {
+    let mut mac = <Hmac<Sha256>>::new_from_slice(kc).unwrap();
+    mac.update(hb_no_mac);
+    let out = mac.finalize().into_bytes();
+    let mut mac_bytes = [0u8; AWDOG_MAC_LEN];
+    mac_bytes.copy_from_slice(&out);
+    mac_bytes
+}
+
+fn build_hb(kc: &[u8; AWDOG_KEY_LEN], nonce: u64, pid: u32, exe_fp: u64) -> AwdogHb {
+    let ts_ns = now_ns();
+    let mut aad = Vec::with_capacity(8 + 4 + 8 + 8);
+    aad.write_u64::<LittleEndian>(nonce).unwrap();
+    aad.write_u32::<LittleEndian>(pid).unwrap();
+    aad.write_u64::<LittleEndian>(exe_fp).unwrap();
+    aad.write_u64::<LittleEndian>(ts_ns).unwrap();
+
+    let mac = hmac_mac(kc, &aad);
+
+    AwdogHb {
+        monotonic_nonce: nonce,
+        pid,
+        exe_fingerprint: exe_fp,
+        ts_ns,
+        mac,
+    }
 }

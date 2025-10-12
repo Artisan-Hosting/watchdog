@@ -1,25 +1,13 @@
 use artisan_middleware::dusa_collection_utils::{
-    core::{
-        errors::ErrorArrayItem,
-        logger::LogLevel,
-        types::pathtype::PathType,
-    },
+    core::{errors::ErrorArrayItem, logger::LogLevel, types::pathtype::PathType},
     log,
 };
 
 use crate::definitions::{self, VerificationEntry};
 
 const VERIFICATION_MATRIX: [(&str, &str, Option<&str>); 2] = [
-    (
-        "ledger",
-        definitions::LEDGER_PATH,
-        None,
-    ),
-    (
-        "credentials",
-        definitions::GIT_CONFIG_PATH,
-        None,
-    ),
+    ("ledger", definitions::LEDGER_PATH, None),
+    ("credentials", definitions::GIT_CONFIG_PATH, None),
 ];
 
 pub fn verify_path(path: PathType) -> Result<VerificationEntry, ErrorArrayItem> {
