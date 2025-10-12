@@ -28,6 +28,7 @@ pub mod functions;
 pub mod grpc;
 pub mod pid_persistence;
 pub mod scripts;
+pub mod kernel;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), ErrorArrayItem> {
