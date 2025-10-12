@@ -15,7 +15,6 @@ use crate::definitions::ARTISAN_APPS_DIR;
 use super::{ScriptResult, io_error, new_error};
 
 pub fn clean_cargo_projects(app_name: &str) -> ScriptResult<()> {
-
     let app_dir = Path::new(ARTISAN_APPS_DIR).join(app_name);
     if !app_dir.is_dir() {
         return Err(new_error(

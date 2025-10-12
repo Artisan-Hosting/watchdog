@@ -427,7 +427,7 @@ const AWDOG_KEY_LEN: usize = 32;
 const AWDOG_MAC_LEN: usize = 32;
 const AWDOG_MODULE_UUID: [u8; 16] = *b"AWDOGMOD-UUIDv10";
 
-#[repr(C, packed)]
+#[repr(C)]
 #[derive(Clone, Copy)]
 struct AwdogRegister {
     pid: u32,
