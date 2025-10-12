@@ -24,7 +24,10 @@ use std::{
 };
 use tokio::process::Command;
 
-use crate::{definitions::VerificationEntry, functions::generate_safe_client_runner_list};
+use crate::{
+    definitions::VerificationEntry, functions::generate_safe_client_runner_list,
+    scripts::clean_cargo_projects,
+};
 use crate::{
     definitions::{self as defs, ARTISAN_BIN_DIR, CRITICAL_APPLICATIONS},
     scripts::build_runner_binary,
@@ -155,6 +158,15 @@ async fn main() -> Result<(), ErrorArrayItem> {
                         let mut statuses = build_status_store.write().await;
                         statuses
                             .insert(ais_key.clone(), defs::BuildStatus::success(ais_name, false));
+                    }
+
+                    if let Err(err) = clean_cargo_projects(ais_name) {
+                        log!(
+                            LogLevel::Error,
+                            "Failed to run cargo clean {}. {}",
+                            ais_name,
+                            err.err_mesg
+                        );
                     }
                 }
                 Err(err) => {
@@ -317,6 +329,14 @@ async fn main() -> Result<(), ErrorArrayItem> {
                 }
             } else {
                 log!(LogLevel::Info, "Built: {}!", runner);
+                if let Err(err) = clean_cargo_projects(&runner) {
+                    log!(
+                        LogLevel::Error,
+                        "Failed to run cargo clean {}. {}",
+                        runner,
+                        err.err_mesg
+                    );
+                }
             }
         }
 
@@ -452,8 +472,14 @@ fn start_kernel_watchdog() -> Result<(), ErrorArrayItem> {
         .map_err(ErrorArrayItem::from)?;
     let fd = file.as_raw_fd();
 
-    println!("REGISTER ioctl number: 0x{:x}", nix::request_code_write!(AWDOG_IOC_MAGIC, AWDOG_IOCTL_REGISTER_NR, std::mem::size_of::<AwdogRegister>()));
-
+    println!(
+        "REGISTER ioctl number: 0x{:x}",
+        nix::request_code_write!(
+            AWDOG_IOC_MAGIC,
+            AWDOG_IOCTL_REGISTER_NR,
+            std::mem::size_of::<AwdogRegister>()
+        )
+    );
 
     let pid = process::id();
     let exe_fp = exe_fingerprint();

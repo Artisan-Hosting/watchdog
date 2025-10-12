@@ -10,20 +10,25 @@ use artisan_middleware::dusa_collection_utils::{
     log,
 };
 
+use crate::definitions::ARTISAN_APPS_DIR;
+
 use super::{ScriptResult, io_error, new_error};
 
-pub fn clean_cargo_projects(root_dir: impl AsRef<Path>) -> ScriptResult<()> {
-    let root_dir = root_dir.as_ref();
+pub fn clean_cargo_projects(app_name: &str) -> ScriptResult<()> {
 
-    if !root_dir.exists() {
+    let app_dir = Path::new(ARTISAN_APPS_DIR).join(app_name);
+    if !app_dir.is_dir() {
         return Err(new_error(
             Errors::NotFound,
-            format!("Root directory does not exist: {}", root_dir.display()),
+            format!(
+                "Application directory does not exist: {}",
+                app_dir.display()
+            ),
         ));
     }
 
     let mut manifests = Vec::new();
-    collect_manifests(root_dir, &mut manifests)?;
+    collect_manifests(&app_dir, &mut manifests)?;
 
     for manifest in manifests {
         if let Some(dir) = manifest.parent() {
