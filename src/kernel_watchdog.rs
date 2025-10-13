@@ -48,7 +48,7 @@ struct AwdogRegister {
     proto_ver: u32,
 }
 
-#[repr(C, packed)]
+#[repr(C)]  // packed works on fedora but not debian
 #[derive(Clone, Copy)]
 struct AwdogHb {
     monotonic_nonce: u64,
