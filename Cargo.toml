@@ -24,6 +24,7 @@ hmac = "0.12"
 byteorder = "1.5"
 tss-esapi = "7"          # TPM 2.0 bindings
 getrandom = "0.2"
+rand = { version = "0.8", features = ["std"] }
 
 [build-dependencies]
 tonic-build = "0.12"

@@ -10,7 +10,12 @@ use artisan_middleware::{
     process_manager::spawn_complex_process,
 };
 use std::{os::unix::fs::chown, time::Duration};
-use tokio::{process::Command, task::JoinSet};
+use tokio::process::Command;
+#[cfg(not(unix))]
+use tokio::signal::ctrl_c;
+#[cfg(unix)]
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::task::JoinSet;
 
 use crate::{
     definitions::VerificationEntry, functions::generate_safe_client_runner_list,
@@ -563,5 +568,36 @@ async fn main() -> Result<(), ErrorArrayItem> {
         log!(LogLevel::Info, "Spawned all client applications");
     }
 
-    loop {}
+    log!(
+        LogLevel::Debug,
+        "Main thread waiting for termination signal"
+    );
+
+    #[cfg(unix)]
+    {
+        let mut term = signal(SignalKind::terminate()).map_err(ErrorArrayItem::from)?;
+        let mut interrupt = signal(SignalKind::interrupt()).map_err(ErrorArrayItem::from)?;
+
+        tokio::select! {
+            _ = term.recv() => {
+                log!(LogLevel::Info, "Received SIGTERM; beginning shutdown");
+            }
+            _ = interrupt.recv() => {
+                log!(LogLevel::Info, "Received SIGINT; beginning shutdown");
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        ctrl_c().await.map_err(ErrorArrayItem::from)?;
+        log!(
+            LogLevel::Info,
+            "Received termination signal (ctrl-c); beginning shutdown"
+        );
+    }
+
+    log!(LogLevel::Debug, "Shutdown signal handled; exiting main");
+
+    Ok(())
 }

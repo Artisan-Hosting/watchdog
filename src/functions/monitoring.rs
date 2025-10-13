@@ -17,6 +17,7 @@ use nix::sys::signal::{
 };
 use nix::unistd::Pid;
 use once_cell::sync::Lazy;
+use rand::Rng;
 use std::{
     collections::{HashMap, HashSet},
     convert::TryFrom,
@@ -44,6 +45,7 @@ const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/s
 
 static LAST_SEEN_STATE_PIDS: Lazy<Mutex<HashMap<String, u32>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static STATE_IO_QUEUE: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 // pub async fn build_critical(name: &str) -> Result<(), ErrorArrayItem> {
 //     let ais_name = definitions::ais_name(name);
@@ -445,13 +447,53 @@ async fn load_state_snapshot(app: &ApplicationIdentifiers) -> Option<AppState> {
 
 async fn load_state_snapshot_by_name(name: &str) -> Option<AppState> {
     let path = state_file_path(name);
+    if let Some(state) = throttled_state_load(path).await {
+        Some(state)
+    } else {
+        log!(
+            LogLevel::Trace,
+            "Unable to load state for {} (see prior logs)",
+            name
+        );
+        None
+    }
+}
+
+async fn throttled_state_load(path: PathType) -> Option<AppState> {
+    let display = path.to_string();
+    let delay_ms = rand::thread_rng().gen_range(1_000..=3_000);
+    log!(
+        LogLevel::Trace,
+        "Queueing state read for {} with delay {}ms",
+        display,
+        delay_ms
+    );
+
+    let _guard = STATE_IO_QUEUE.lock().await;
+    log!(
+        LogLevel::Trace,
+        "State read acquired slot for {}; sleeping {}ms",
+        display,
+        delay_ms
+    );
+    time::sleep(Duration::from_millis(delay_ms as u64)).await;
+
     match StatePersistence::load_state(&path).await {
-        Ok(state) => Some(state),
+        Ok(state) => {
+            log!(
+                LogLevel::Debug,
+                "Loaded state file {} after {}ms delay",
+                display,
+                delay_ms
+            );
+            Some(state)
+        }
         Err(err) => {
             log!(
                 LogLevel::Trace,
-                "Unable to load state for {}: {}",
-                name,
+                "State file load failed for {} after {}ms delay: {}",
+                display,
+                delay_ms,
                 err
             );
             None
