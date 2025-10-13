@@ -4,27 +4,31 @@
 #include "awdog.h"
 #include <crypto/hash.h> // HMAC (shash)
 #include <linux/cdev.h>
+#include <linux/compiler.h>
 #include <linux/cred.h>
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/jiffies.h>
 #include <linux/kmod.h>
+#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/random.h>
 #include <linux/reboot.h>
+#include <linux/spinlock.h>
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 #include <linux/timekeeping.h>
 #include <linux/timer.h>
 #include <linux/uaccess.h>
 #include <linux/version.h>
-
+#include <linux/workqueue.h>
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
-  #define awdog_class_create(name) class_create(name)
+#define awdog_class_create(name) class_create(name)
 #else
-  #define awdog_class_create(name) class_create(THIS_MODULE, name)
+#define awdog_class_create(name) class_create(THIS_MODULE, name)
 #endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 6, 0)
@@ -34,9 +38,11 @@ static inline int timer_shutdown_sync(struct timer_list *timer) {
 #endif
 
 #define DRV_NAME "awdog"
+#define AWDOG_REASON_LEN 64
 
 struct awdog_ctx {
   struct mutex lock; /* serialize register/hb/unreg */
+  spinlock_t work_lock; /* protects queued work reasons */
   bool registered;
   u32 pid;
   kuid_t uid;
@@ -47,9 +53,16 @@ struct awdog_ctx {
   u64 session_id;
   u32 proto_ver;
   u64 last_nonce;
+  u64 last_hb_mono_ns;
   unsigned long deadline;
 
   struct timer_list timer;
+
+  /* async actions */
+  struct work_struct reboot_work;
+  struct work_struct sos_work;
+  char reboot_reason[AWDOG_REASON_LEN];
+  char sos_reason[AWDOG_REASON_LEN];
 
   /* crypto */
   struct crypto_shash *tfm; /* "hmac(sha256)" */
@@ -68,40 +81,93 @@ static int awdog_reset_deadline_locked(void) {
   return 0;
 }
 
-static int awdog_run_saver(const char *why) {
-  char *argv[] = {"/opt/artisan/bin/ais_manager", (char *)why,
-                  NULL}; // incase of emergencies not the plight on society
+static int __maybe_unused awdog_run_ko_test(const char *why) {
+  char *argv[] = {"/bin/echo", (char *)why, NULL};
   static char *envp[] = {"HOME=/", "PATH=/sbin:/bin:/usr/sbin:/usr/bin", NULL};
+  pr_emerg(DRV_NAME ": invoking ko-test: %s\n", why);
+  return call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+}
+
+static int awdog_run_soscall(const char *reason) {
+  const char *why = reason ? reason : "unknown";
+  char *argv[] = {"/bin/echo", (char *)why, NULL};
+  static char *envp[] = {"HOME=/", "PATH=/sbin:/bin:/usr/sbin:/usr/bin", NULL};
+
   pr_emerg(DRV_NAME ": invoking saver: %s\n", why);
   return call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
 }
 
-static int awdog_run_ko_test(const char *why) {
-  char *argv[] = {"/opt/artisan/bin/ais_welcome", (char *)why,
-                  NULL}; // incase of emergencies not the plight on society
-  static char *envp[] = {"HOME=/", "PATH=/sbin:/bin:/usr/sbin:/usr/bin", NULL};
-  pr_emerg(DRV_NAME ": invoking saver: %s\n", why);
-  return call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
+static void awdog_run_reboot(const char *reason) {
+  pr_emerg(DRV_NAME ": reboot requested (%s)\n", reason);
+  emergency_restart();
+}
+
+static void awdog_reboot_workfn(struct work_struct *work) {
+  struct awdog_ctx *ctx = container_of(work, struct awdog_ctx, reboot_work);
+  unsigned long flags;
+  char reason[sizeof(ctx->reboot_reason)];
+
+  spin_lock_irqsave(&ctx->work_lock, flags);
+  if (strscpy(reason, ctx->reboot_reason, sizeof(reason)) < 0)
+    reason[AWDOG_REASON_LEN - 1] = '\0';
+  spin_unlock_irqrestore(&ctx->work_lock, flags);
+  if (!reason[0])
+    strscpy(reason, "unknown", sizeof(reason));
+
+  // awdog_run_reboot(reason);
+  awdog_run_ko_test(reason);
+}
+
+static void awdog_soscall_workfn(struct work_struct *work) {
+  struct awdog_ctx *ctx = container_of(work, struct awdog_ctx, sos_work);
+  unsigned long flags;
+  char reason[sizeof(ctx->sos_reason)];
+
+  spin_lock_irqsave(&ctx->work_lock, flags);
+  if (strscpy(reason, ctx->sos_reason, sizeof(reason)) < 0)
+    reason[AWDOG_REASON_LEN - 1] = '\0';
+  spin_unlock_irqrestore(&ctx->work_lock, flags);
+  if (!reason[0])
+    strscpy(reason, "unknown", sizeof(reason));
+
+  if (awdog_run_soscall(reason))
+    pr_err(DRV_NAME ": saver helper failed (%s)\n", reason);
+}
+
+static void awdog_queue_reboot(const char *reason) {
+  unsigned long flags;
+  const char *why = reason ? reason : "unknown";
+
+  spin_lock_irqsave(&g.work_lock, flags);
+  if (strscpy(g.reboot_reason, why, sizeof(g.reboot_reason)) < 0)
+    g.reboot_reason[AWDOG_REASON_LEN - 1] = '\0';
+  spin_unlock_irqrestore(&g.work_lock, flags);
+  schedule_work(&g.reboot_work);
+}
+
+static void awdog_queue_soscall(const char *reason) {
+  unsigned long flags;
+  const char *why = reason ? reason : "unknown";
+
+  spin_lock_irqsave(&g.work_lock, flags);
+  if (strscpy(g.sos_reason, why, sizeof(g.sos_reason)) < 0)
+    g.sos_reason[AWDOG_REASON_LEN - 1] = '\0';
+  spin_unlock_irqrestore(&g.work_lock, flags);
+  schedule_work(&g.sos_work);
 }
 
 static void awdog_timeout(struct timer_list *t) {
-  mutex_lock(&g.lock);
-  if (!g.registered) {
-    mutex_unlock(&g.lock);
+  unsigned long deadline = READ_ONCE(g.deadline);
+
+  if (!READ_ONCE(g.registered))
+    return;
+
+  if (time_is_before_jiffies(deadline)) {
+    awdog_queue_soscall("timeout");
+    awdog_queue_reboot("timeout");
     return;
   }
-  if (time_is_before_jiffies(g.deadline)) {
-    pr_emerg(DRV_NAME ": missed heartbeat; taking emergency action\n");
-    /* Try saver, then immediate reboot */
-    mutex_unlock(&g.lock);
-    awdog_run_saver("timeout");
-    pr_emerg(DRV_NAME ": emergency_restart\n");
-    // emergency_restart();
-    awdog_run_ko_test("We triggered the restart condition");
-    return;
-  }
-  mutex_unlock(&g.lock);
-  /* Shouldn't happen: deadline is maintained on hb; but keep timer alive */
+
   mod_timer(&g.timer, jiffies + msecs_to_jiffies(1000));
 }
 
@@ -193,7 +259,10 @@ static long awdog_ioctl(struct file *f, unsigned int cmd, unsigned long arg) {
     g.session_id = r.session_id;
     g.proto_ver = r.proto_ver;
     g.last_nonce = 0;
+    g.last_hb_mono_ns = 0;
     g.registered = true;
+    memset(g.reboot_reason, 0, sizeof(g.reboot_reason));
+    memset(g.sos_reason, 0, sizeof(g.sos_reason));
     awdog_reset_deadline_locked();
     mutex_unlock(&g.lock);
 
@@ -206,8 +275,13 @@ static long awdog_ioctl(struct file *f, unsigned int cmd, unsigned long arg) {
     memset(g.key, 0, AWDOG_KEY_LEN);
     g.registered = false;
     g.last_nonce = 0;
+    g.last_hb_mono_ns = 0;
+    memset(g.reboot_reason, 0, sizeof(g.reboot_reason));
+    memset(g.sos_reason, 0, sizeof(g.sos_reason));
     timer_shutdown_sync(&g.timer);
     mutex_unlock(&g.lock);
+    cancel_work_sync(&g.sos_work);
+    cancel_work_sync(&g.reboot_work);
     pr_info(DRV_NAME ": unregistered\n");
     return 0;
   }
@@ -246,6 +320,28 @@ static ssize_t awdog_write(struct file *f, const char __user *buf, size_t len,
   if (ret)
     goto out;
 
+  {
+    u64 now_mono_ns = ktime_get_ns();
+    u64 gap_ms = 0;
+
+    if (g.last_hb_mono_ns)
+      gap_ms = div_u64(now_mono_ns - g.last_hb_mono_ns, NSEC_PER_MSEC);
+
+    g.last_hb_mono_ns = now_mono_ns;
+
+    {
+      u64 now_real_ns = ktime_get_real_ns();
+      s64 latency_ns = (s64)now_real_ns - (s64)hb.ts_ns;
+      s64 latency_ms = div_s64(latency_ns, NSEC_PER_MSEC);
+
+      pr_debug(
+          DRV_NAME
+          ": heartbeat nonce=%llu pid=%u gap_ms=%llums latency_ms=%lldms\n",
+          hb.monotonic_nonce, hb.pid, (unsigned long long)gap_ms,
+          (long long)latency_ms);
+    }
+  }
+
   g.last_nonce = hb.monotonic_nonce;
   awdog_reset_deadline_locked();
   ret = sizeof(hb);
@@ -253,8 +349,10 @@ out:
   mutex_unlock(&g.lock);
   if (ret < 0) {
     pr_warn(DRV_NAME ": bad heartbeat (%d), triggering saver+reboot\n", ret);
-    awdog_run_saver("verify-failed");
-    emergency_restart();
+    if (awdog_run_soscall("verify-failed"))
+      pr_err(DRV_NAME ": saver helper failed (verify-failed)\n");
+    // awdog_run_reboot("verify-failed");
+      awdog_run_ko_test("verify-failed");
   }
   return ret;
 }
@@ -269,7 +367,11 @@ static const struct file_operations awdog_fops = {
 
 static int __init awdog_init(void) {
   int ret;
+
   mutex_init(&g.lock);
+  spin_lock_init(&g.work_lock);
+  INIT_WORK(&g.reboot_work, awdog_reboot_workfn);
+  INIT_WORK(&g.sos_work, awdog_soscall_workfn);
 
   g.tfm = crypto_alloc_shash("hmac(sha256)", 0, 0);
   if (IS_ERR(g.tfm)) {
@@ -316,6 +418,8 @@ out_crypto:
 
 static void __exit awdog_exit(void) {
   timer_shutdown_sync(&g.timer);
+  cancel_work_sync(&g.sos_work);
+  cancel_work_sync(&g.reboot_work);
   device_destroy(g.class, g.devt);
   class_destroy(g.class);
   cdev_del(&g.cdev);
@@ -329,5 +433,5 @@ static void __exit awdog_exit(void) {
 module_init(awdog_init);
 module_exit(awdog_exit);
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Darrion Whitfield");
+MODULE_AUTHOR("Darrion Whitfield <dwhitfield@artisanhosting.net>");
 MODULE_DESCRIPTION("Artisan Watchdog (HMAC heartbeat, saver+reboot)");
