@@ -4,6 +4,7 @@ use std::{
     path::Path,
 };
 
+use crate::definitions::AIS_RUNNER_SRC_DIR;
 use artisan_middleware::dusa_collection_utils::{
     core::{
         errors::{ErrorArrayItem, Errors},
@@ -123,6 +124,14 @@ pub async fn clean_cargo_projects(app_name: &str) -> ScriptResult<()> {
 pub async fn revert_to_vetted(app_name: &str) -> ScriptResult<()> {
     let name = app_name.to_string();
     run_script_job("revert_to_vetted", move || revert::revert_to_vetted(&name)).await
+}
+
+pub async fn clean_runner_workspace() -> ScriptResult<()> {
+    use std::path::Path;
+    run_script_job("clean_runner_workspace", move || {
+        clean::run_cargo_clean(Path::new(AIS_RUNNER_SRC_DIR))
+    })
+    .await
 }
 
 #[cfg(unix)]

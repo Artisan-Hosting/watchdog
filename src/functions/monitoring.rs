@@ -198,14 +198,20 @@ async fn reconcile_process_store_with_state(
                 guard.insert(name.to_string(), SupervisedProcesses::Process(proc));
             }
 
-            if let Err(err) = ebpf::register_pid(desired_pid) {
-                log!(
-                    LogLevel::Warn,
-                    "Failed to register {} (PID {}) with eBPF tracker after reattachment: {}",
-                    name,
-                    desired_pid,
-                    err.err_mesg
-                );
+            match ebpf::register_pid_with_retry(desired_pid).await {
+                Ok(_) => crate::pid_persistence::clear_pid_failure(desired_pid).await,
+                Err(err) => {
+                    if !crate::pid_persistence::is_pid_marked_dead(desired_pid).await {
+                        log!(
+                            LogLevel::Warn,
+                            "Failed to register {} (PID {}) with eBPF tracker after reattachment: {}",
+                            name,
+                            desired_pid,
+                            err.err_mesg
+                        );
+                    }
+                    crate::pid_persistence::record_pid_failure(desired_pid).await;
+                }
             }
 
             if let Err(err) = crate::pid_persistence::remember_process(name, desired_pid).await {
@@ -931,14 +937,20 @@ async fn start_with_handle(
             if let Ok(pid) = child.get_pid().await {
                 log!(LogLevel::Info, "Started: {}:{}", application, pid);
 
-                if let Err(err) = ebpf::register_pid(pid) {
-                    log!(
-                        LogLevel::Warn,
-                        "Failed to register {} (PID {}) with eBPF tracker: {}",
-                        application,
-                        pid,
-                        err.err_mesg
-                    );
+                match ebpf::register_pid_with_retry(pid).await {
+                    Ok(_) => crate::pid_persistence::clear_pid_failure(pid).await,
+                    Err(err) => {
+                        if !crate::pid_persistence::is_pid_marked_dead(pid).await {
+                            log!(
+                                LogLevel::Warn,
+                                "Failed to register {} (PID {}) with eBPF tracker: {}",
+                                application,
+                                pid,
+                                err.err_mesg
+                            );
+                        }
+                        crate::pid_persistence::record_pid_failure(pid).await;
+                    }
                 }
 
                 if let Err(err) = crate::pid_persistence::remember_process(application, pid).await {

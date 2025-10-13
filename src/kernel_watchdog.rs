@@ -160,7 +160,7 @@ fn run_heartbeat_loop(
                 let hb_mtn = hb.monotonic_nonce;
                 let hb_ts_ns = hb.ts_ns;
                 log!(
-                    LogLevel::Info,
+                    LogLevel::Trace,
                     "Watchdog heartbeat sent (nonce={} ts_ns={} gap_ms={})",
                     hb_mtn,
                     hb_ts_ns,

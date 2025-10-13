@@ -7,6 +7,7 @@ use artisan_middleware::{
 };
 use once_cell::sync::Lazy;
 use std::env;
+use tokio::time::{Duration, sleep};
 
 #[cfg(ebpf_supported)]
 mod linux;
@@ -106,4 +107,28 @@ pub fn usage_for_pid(pid: u32) -> Result<Option<NetworkUsage>, ErrorArrayItem> {
 
 pub fn cleanup_dead_pids() -> Result<(), ErrorArrayItem> {
     manager().cleanup_dead_pids()
+}
+
+pub async fn register_pid_with_retry(pid: u32) -> Result<(), ErrorArrayItem> {
+    let mut delay = Duration::from_millis(50);
+    const MAX_ATTEMPTS: usize = 3;
+
+    for attempt in 1..=MAX_ATTEMPTS {
+        match manager().register_pid(pid) {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                let lower = err.err_mesg.to_lowercase();
+                let should_retry = lower.contains("would block") && attempt < MAX_ATTEMPTS;
+                if should_retry {
+                    sleep(delay).await;
+                    delay = (delay * 2).min(Duration::from_millis(500));
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+    }
+
+    // The loop always returns; unreachable
+    unreachable!()
 }

@@ -18,16 +18,12 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::task::JoinSet;
 
 use crate::{
-    definitions::VerificationEntry, functions::generate_safe_client_runner_list,
-    scripts::clean_cargo_projects,
-};
-use crate::{
-    definitions::{self as defs, ARTISAN_BIN_DIR, CRITICAL_APPLICATIONS},
-    scripts::build_runner_binary,
-};
-use crate::{
-    functions::{monitor_application_states, verify_path},
-    scripts::{build_application, revert_to_vetted},
+    definitions::{self as defs, ARTISAN_BIN_DIR, CRITICAL_APPLICATIONS, VerificationEntry},
+    functions::{generate_safe_client_runner_list, monitor_application_states, verify_path},
+    scripts::{
+        build_application, build_runner_binary, clean_cargo_projects, clean_runner_workspace,
+        revert_to_vetted,
+    },
 };
 
 pub mod definitions;
@@ -317,14 +313,20 @@ async fn main() -> Result<(), ErrorArrayItem> {
                                     pid
                                 );
 
-                                if let Err(err) = ebpf::register_pid(pid) {
-                                    log!(
-                                        LogLevel::Warn,
-                                        "Failed to register {} (PID {}) with eBPF tracker: {}",
-                                        ais,
-                                        pid,
-                                        err.err_mesg
-                                    );
+                                match ebpf::register_pid_with_retry(pid).await {
+                                    Ok(_) => crate::pid_persistence::clear_pid_failure(pid).await,
+                                    Err(err) => {
+                                        if !crate::pid_persistence::is_pid_marked_dead(pid).await {
+                                            log!(
+                                                LogLevel::Warn,
+                                                "Failed to register {} (PID {}) with eBPF tracker: {}",
+                                                ais,
+                                                pid,
+                                                err.err_mesg
+                                            );
+                                        }
+                                        crate::pid_persistence::record_pid_failure(pid).await;
+                                    }
                                 }
 
                                 if let Err(err) =
@@ -415,16 +417,6 @@ async fn main() -> Result<(), ErrorArrayItem> {
                 match build_runner_binary(&runner).await {
                     Ok(_) => {
                         log!(LogLevel::Info, "Built client runner: {}", runner);
-                        if let Err(err) = clean_cargo_projects(&runner).await {
-                            log!(
-                                LogLevel::Error,
-                                "Failed to run cargo clean for {}: {}",
-                                runner,
-                                err.err_mesg
-                            );
-                        } else {
-                            log!(LogLevel::Trace, "Completed cargo clean for {}", runner);
-                        }
                     }
                     Err(err) => {
                         log!(
@@ -453,6 +445,20 @@ async fn main() -> Result<(), ErrorArrayItem> {
                     "Client build task join failure: {}",
                     join_err
                 );
+            }
+        }
+
+        if !client_applications.is_empty() {
+            match clean_runner_workspace().await {
+                Ok(_) => log!(
+                    LogLevel::Debug,
+                    "Cleaned shared runner workspace after builds"
+                ),
+                Err(err) => log!(
+                    LogLevel::Warn,
+                    "Failed to clean runner workspace: {}",
+                    err.err_mesg
+                ),
             }
         }
 
@@ -503,14 +509,20 @@ async fn main() -> Result<(), ErrorArrayItem> {
                                     pid
                                 );
 
-                                if let Err(err) = ebpf::register_pid(pid) {
-                                    log!(
-                                        LogLevel::Warn,
-                                        "Failed to register {} (PID {}) with eBPF tracker: {}",
-                                        client_app,
-                                        pid,
-                                        err.err_mesg
-                                    );
+                                match ebpf::register_pid_with_retry(pid).await {
+                                    Ok(_) => crate::pid_persistence::clear_pid_failure(pid).await,
+                                    Err(err) => {
+                                        if !crate::pid_persistence::is_pid_marked_dead(pid).await {
+                                            log!(
+                                                LogLevel::Warn,
+                                                "Failed to register {} (PID {}) with eBPF tracker: {}",
+                                                client_app,
+                                                pid,
+                                                err.err_mesg
+                                            );
+                                        }
+                                        crate::pid_persistence::record_pid_failure(pid).await;
+                                    }
                                 }
 
                                 if let Err(err) =

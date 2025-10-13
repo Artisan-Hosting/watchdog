@@ -76,6 +76,14 @@ async fn remove_dead_pid(pid: u32) {
     }
 }
 
+pub async fn record_pid_failure(pid: u32) {
+    mark_pid_dead(pid).await;
+}
+
+pub async fn clear_pid_failure(pid: u32) {
+    remove_dead_pid(pid).await;
+}
+
 /// Attempts to reclaim any processes that were persisted before a crash by
 /// reattaching via [`SupervisedProcess`] and sending termination signals.
 pub async fn reclaim_orphan_processes() -> Result<(), ErrorArrayItem> {
