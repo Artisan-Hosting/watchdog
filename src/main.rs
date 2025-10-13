@@ -1,7 +1,7 @@
 use artisan_middleware::{
     dusa_collection_utils::{
         core::{
-            errors::{ErrorArray, ErrorArrayItem, Errors},
+            errors::{ErrorArray, ErrorArrayItem},
             logger::LogLevel,
             types::pathtype::PathType,
         },
@@ -9,20 +9,8 @@ use artisan_middleware::{
     },
     process_manager::spawn_complex_process,
 };
-use byteorder::{LittleEndian, WriteBytesExt};
-use getrandom::getrandom;
-use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
-use nix::ioctl_write_ptr;
-use nix::unistd;
-use sha2::Sha256;
-use std::{
-    fs::OpenOptions,
-    os::{fd::AsRawFd, unix::fs::chown},
-    process, thread,
-    time::{Duration, SystemTime},
-};
-use tokio::process::Command;
+use std::{os::unix::fs::chown, time::Duration};
+use tokio::{process::Command, task::JoinSet};
 
 use crate::{
     definitions::VerificationEntry, functions::generate_safe_client_runner_list,
@@ -41,11 +29,31 @@ pub mod definitions;
 pub mod ebpf;
 pub mod functions;
 pub mod grpc;
+pub mod kernel_watchdog;
 pub mod pid_persistence;
 pub mod scripts;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), ErrorArrayItem> {
+    log!(LogLevel::Debug, "Watchdog runtime starting up");
+
+    // Initializing kernel components
+    '_kernel_watchdog: {
+        match kernel_watchdog::start_kernel_watchdog() {
+            Ok(_) => {
+                log!(LogLevel::Info, "Kernel watchdog heartbeat thread started");
+            }
+            Err(err) => {
+                log!(
+                    LogLevel::Error,
+                    "Failed to initialise kernel watchdog client: {}",
+                    err.err_mesg
+                );
+            }
+        }
+    }
+
+    // Defining initial variables
     let system_application_status_store = defs::new_system_application_status_store();
     let client_application_status_store = defs::new_client_application_status_store();
     let build_status_store = defs::new_build_status_store();
@@ -60,7 +68,9 @@ async fn main() -> Result<(), ErrorArrayItem> {
         let system_status_store = system_application_status_store.clone();
         let client_status_store = client_application_status_store.clone();
         let process_store = system_process_store.clone();
+        log!(LogLevel::Debug, "Launching application state monitor task");
         tokio::spawn(async move {
+            log!(LogLevel::Trace, "Application state monitor loop started");
             monitor_application_states(
                 system_status_store,
                 client_status_store,
@@ -78,7 +88,9 @@ async fn main() -> Result<(), ErrorArrayItem> {
         let verification_store = verification_status_store.clone();
         let system_info_store = system_information_store.clone();
         let process_store = system_process_store.clone();
+        log!(LogLevel::Debug, "Launching gRPC server task");
         tokio::spawn(async move {
+            log!(LogLevel::Trace, "gRPC server task initialising");
             if let Err(err) = grpc::serve_watchdog(
                 system_store,
                 client_store,
@@ -98,45 +110,59 @@ async fn main() -> Result<(), ErrorArrayItem> {
         });
     }
 
-    '_kernel_watchdog: {
-        match start_kernel_watchdog() {
-            Ok(_) => {
-                log!(LogLevel::Info, "Kernel watchdog heartbeat thread started");
-            }
-            Err(err) => {
-                log!(
-                    LogLevel::Error,
-                    "Failed to initialise kernel watchdog client: {}",
-                    err.err_mesg
-                );
-            }
-        }
-    }
-
     '_hash_verification: {
+        log!(
+            LogLevel::Debug,
+            "Starting verification of {} core paths",
+            defs::CORE_VERIFICATION_PATHS.len()
+        );
+
         let mut verification_results: Vec<VerificationEntry> = Vec::new();
+        let mut verification_tasks: JoinSet<(String, Result<VerificationEntry, ErrorArrayItem>)> =
+            JoinSet::new();
 
         for path in defs::CORE_VERIFICATION_PATHS.iter() {
-            let path: PathType = PathType::Str((*path).into());
-            match verify_path(path) {
-                Ok(result) => verification_results.push(result),
-                Err(err) => {
-                    // something went really wrong
+            let label = path.to_string();
+            verification_tasks.spawn(async move {
+                let path_type: PathType = PathType::Str(label.clone().into());
+                log!(LogLevel::Trace, "Verifying path: {}", label);
+                let outcome = verify_path(path_type);
+                (label, outcome)
+            });
+        }
+
+        while let Some(task) = verification_tasks.join_next().await {
+            match task {
+                Ok((label, Ok(entry))) => {
+                    log!(LogLevel::Debug, "Verification succeeded: {}", label);
+                    verification_results.push(entry);
+                }
+                Ok((label, Err(err))) => {
+                    log!(
+                        LogLevel::Error,
+                        "Verification errored for {}: {}",
+                        label,
+                        err.err_mesg
+                    );
                     ErrorArray::from(err).display(true);
+                }
+                Err(join_err) => {
+                    log!(
+                        LogLevel::Error,
+                        "Verification task join failure: {}",
+                        join_err
+                    );
                 }
             }
         }
 
-        verification_results
-            .iter()
-            .for_each(|entry| match entry.verified {
-                true => {
-                    log!(LogLevel::Info, "Verified: {}", entry.name);
-                }
-                false => {
-                    log!(LogLevel::Error, "Verified Failed: {}", entry.name);
-                }
-            });
+        for entry in &verification_results {
+            if entry.verified {
+                log!(LogLevel::Info, "Verified: {}", entry.name);
+            } else {
+                log!(LogLevel::Error, "Verification failed: {}", entry.name);
+            }
+        }
 
         {
             let mut store = verification_status_store.write().await;
@@ -145,70 +171,97 @@ async fn main() -> Result<(), ErrorArrayItem> {
     }
 
     '_building_critial_apps: {
+        log!(
+            LogLevel::Debug,
+            "Dispatching build tasks for {} critical applications",
+            defs::CRITICAL_APPLICATIONS.len()
+        );
+
+        let mut build_tasks: JoinSet<Result<(), ()>> = JoinSet::new();
+
         for app in defs::CRITICAL_APPLICATIONS {
-            let ais_key = app.ais.to_string();
-            let ais_name = ais_key.as_str();
+            let ais = app.ais.to_string();
+            let canonical = app.canonical.to_string();
+            let build_status_store = build_status_store.clone();
 
-            log!(LogLevel::Info, "Building: {}!", ais_name);
-            match build_application(ais_name) {
-                Ok(_) => {
-                    log!(LogLevel::Info, "Built: {}!", ais_name);
+            build_tasks.spawn(async move {
+                log!(
+                    LogLevel::Debug,
+                    "Starting build task for {} ({})",
+                    canonical,
+                    ais
+                );
 
-                    {
-                        let mut statuses = build_status_store.write().await;
-                        statuses
-                            .insert(ais_key.clone(), defs::BuildStatus::success(ais_name, false));
-                    }
+                match build_application(&ais).await {
+                    Ok(_) => {
+                        log!(LogLevel::Info, "Built critical application: {}", ais);
 
-                    if let Err(err) = clean_cargo_projects(ais_name) {
-                        log!(
-                            LogLevel::Error,
-                            "Failed to run cargo clean {}. {}",
-                            ais_name,
-                            err.err_mesg
-                        );
-                    }
-                }
-                Err(err) => {
-                    log!(LogLevel::Error, "Failed to build {}!", ais_name);
-                    log!(
-                        LogLevel::Error,
-                        "Got the following error: {}!",
-                        err.err_mesg
-                    );
-                    log!(
-                        LogLevel::Warn,
-                        "Attemping to fallback to earlier version for: {}",
-                        ais_name
-                    );
-
-                    let fallback_used = match revert_to_vetted(ais_name) {
-                        Ok(_) => {
-                            log!(
-                                LogLevel::Info,
-                                "Fellback to older version of: {}!",
-                                ais_name
+                        {
+                            let mut statuses = build_status_store.write().await;
+                            statuses.insert(
+                                ais.clone(),
+                                defs::BuildStatus::success(ais.clone(), false),
                             );
-                            true
                         }
-                        Err(err) => {
+
+                        if let Err(err) = clean_cargo_projects(&ais).await {
                             log!(
                                 LogLevel::Error,
-                                "Failed to fall back to earlier version, help...."
+                                "Failed to run cargo clean for {}: {}",
+                                ais,
+                                err.err_mesg
                             );
-                            ErrorArray::from(err).display(false);
-                            false
+                        } else {
+                            log!(LogLevel::Trace, "Completed cargo clean for {}", ais);
                         }
-                    };
 
-                    {
-                        let mut statuses = build_status_store.write().await;
-                        statuses.insert(
-                            ais_key.clone(),
-                            defs::BuildStatus::failure(ais_name, fallback_used),
+                        Ok(())
+                    }
+                    Err(err) => {
+                        log!(LogLevel::Error, "Failed to build {}: {}", ais, err.err_mesg);
+                        log!(
+                            LogLevel::Warn,
+                            "Attempting fallback to vetted binary for {}",
+                            ais
                         );
+
+                        let fallback_used = match revert_to_vetted(&ais).await {
+                            Ok(_) => {
+                                log!(LogLevel::Info, "Reverted to vetted binary for {}", ais);
+                                true
+                            }
+                            Err(fallback_err) => {
+                                log!(
+                                    LogLevel::Error,
+                                    "Fallback to vetted binary failed for {}: {}",
+                                    ais,
+                                    fallback_err.err_mesg
+                                );
+                                false
+                            }
+                        };
+
+                        {
+                            let mut statuses = build_status_store.write().await;
+                            statuses.insert(
+                                ais.clone(),
+                                defs::BuildStatus::failure(ais.clone(), fallback_used),
+                            );
+                        }
+
+                        Err(())
                     }
                 }
+            });
+        }
+
+        while let Some(joined) = build_tasks.join_next().await {
+            if let Err(join_err) = joined {
+                log!(
+                    LogLevel::Error,
+                    "Critical build task join failure: {}",
+                    join_err
+                );
             }
         }
 
@@ -219,42 +272,63 @@ async fn main() -> Result<(), ErrorArrayItem> {
     }
 
     '_spawning_system_applications: {
-        let system_app_array: Vec<definitions::ApplicationIdentifiers> =
-            CRITICAL_APPLICATIONS.to_vec();
+        log!(
+            LogLevel::Debug,
+            "Spawning {} system applications",
+            CRITICAL_APPLICATIONS.len()
+        );
 
-        for app in system_app_array {
-            if app.canonical != "welcome" {
-                let binary_path = PathType::Content(format!("{}/{}", ARTISAN_BIN_DIR, app.ais));
-                let working_dir = PathType::Content(format!("/etc/{}", app.ais)); //This is the production value
-                // let working_dir = PathType::Content(format!("/opt/artisan/apps/{}", app.ais));
+        let mut spawn_tasks: JoinSet<()> = JoinSet::new();
 
-                // assembling command
+        for app in CRITICAL_APPLICATIONS {
+            if app.canonical == "welcome" {
+                continue;
+            }
+
+            let ais = app.ais.to_string();
+            let canonical = app.canonical.to_string();
+            let process_store = system_process_store.clone();
+
+            spawn_tasks.spawn(async move {
+                log!(
+                    LogLevel::Debug,
+                    "Launching system process {} ({})",
+                    canonical,
+                    ais
+                );
+
+                let binary_path = PathType::Content(format!("{}/{}", ARTISAN_BIN_DIR, ais));
+                let working_dir = PathType::Content(format!("/etc/{}", ais));
                 let mut command = Command::new(binary_path);
+
                 match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
                     Ok(mut child) => {
-                        let pid_result = child.get_pid().await;
-
-                        match pid_result {
+                        match child.get_pid().await {
                             Ok(pid) => {
-                                log!(LogLevel::Info, "Started: {}:{}", app.ais, pid);
+                                log!(
+                                    LogLevel::Info,
+                                    "Started system app {} with pid {}",
+                                    ais,
+                                    pid
+                                );
 
                                 if let Err(err) = ebpf::register_pid(pid) {
                                     log!(
                                         LogLevel::Warn,
                                         "Failed to register {} (PID {}) with eBPF tracker: {}",
-                                        app.ais,
+                                        ais,
                                         pid,
                                         err.err_mesg
                                     );
                                 }
 
                                 if let Err(err) =
-                                    crate::pid_persistence::remember_process(app.ais, pid).await
+                                    crate::pid_persistence::remember_process(&ais, pid).await
                                 {
                                     log!(
                                         LogLevel::Error,
                                         "Failed to persist PID for {}: {}",
-                                        app.ais,
+                                        ais,
                                         err.err_mesg
                                     );
                                 }
@@ -263,7 +337,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
                                 log!(
                                     LogLevel::Error,
                                     "Failed to resolve PID for {}: {}",
-                                    app.ais,
+                                    ais,
                                     err
                                 );
                             }
@@ -271,18 +345,32 @@ async fn main() -> Result<(), ErrorArrayItem> {
 
                         child.monitor_stdx().await;
                         child.monitor_usage().await;
-                        if let Ok(mut store) = system_process_store.try_write().await {
+                        if let Ok(mut store) = process_store.try_write().await {
                             store.insert(
-                                app.ais.to_string(),
+                                ais.clone(),
                                 definitions::SupervisedProcesses::Child(child),
                             );
                         }
                     }
                     Err(err) => {
-                        log!(LogLevel::Error, "Failed to spawn: {}: {}", app.ais, err);
-                        continue;
+                        log!(
+                            LogLevel::Error,
+                            "Failed to spawn system app {}: {}",
+                            ais,
+                            err
+                        );
                     }
-                };
+                }
+            });
+        }
+
+        while let Some(result) = spawn_tasks.join_next().await {
+            if let Err(join_err) = result {
+                log!(
+                    LogLevel::Error,
+                    "System spawn task join failure: {}",
+                    join_err
+                );
             }
         }
 
@@ -308,35 +396,58 @@ async fn main() -> Result<(), ErrorArrayItem> {
     };
 
     '_building_client_runners: {
-        log!(LogLevel::Info, "Building client runners");
+        log!(
+            LogLevel::Debug,
+            "Dispatching build tasks for {} client runners",
+            client_applications.len()
+        );
 
-        for runner in &client_applications {
-            log!(LogLevel::Info, "Building: {}!", runner);
-            if let Err(err) = build_runner_binary(runner) {
+        let mut runner_tasks: JoinSet<()> = JoinSet::new();
+
+        for runner in client_applications.iter().cloned() {
+            runner_tasks.spawn(async move {
+                log!(LogLevel::Debug, "Building client runner {}", runner);
+                match build_runner_binary(&runner).await {
+                    Ok(_) => {
+                        log!(LogLevel::Info, "Built client runner: {}", runner);
+                        if let Err(err) = clean_cargo_projects(&runner).await {
+                            log!(
+                                LogLevel::Error,
+                                "Failed to run cargo clean for {}: {}",
+                                runner,
+                                err.err_mesg
+                            );
+                        } else {
+                            log!(LogLevel::Trace, "Completed cargo clean for {}", runner);
+                        }
+                    }
+                    Err(err) => {
+                        log!(
+                            LogLevel::Error,
+                            "Failed to build client runner {}: {}",
+                            runner,
+                            err.err_mesg
+                        );
+                        if let Err(fallback_err) = revert_to_vetted(&runner).await {
+                            log!(
+                                LogLevel::Error,
+                                "Failed to fallback for {}: {}",
+                                runner,
+                                fallback_err.err_mesg
+                            );
+                        }
+                    }
+                }
+            });
+        }
+
+        while let Some(result) = runner_tasks.join_next().await {
+            if let Err(join_err) = result {
                 log!(
                     LogLevel::Error,
-                    "Failed to build: {}:{}. Attempting fallback",
-                    runner,
-                    err.err_mesg
+                    "Client build task join failure: {}",
+                    join_err
                 );
-                if let Err(err) = revert_to_vetted(runner) {
-                    log!(
-                        LogLevel::Error,
-                        "Failed to fallback for {}: {}",
-                        runner,
-                        err.err_mesg
-                    );
-                }
-            } else {
-                log!(LogLevel::Info, "Built: {}!", runner);
-                if let Err(err) = clean_cargo_projects(&runner) {
-                    log!(
-                        LogLevel::Error,
-                        "Failed to run cargo clean {}. {}",
-                        runner,
-                        err.err_mesg
-                    );
-                }
             }
         }
 
@@ -344,282 +455,113 @@ async fn main() -> Result<(), ErrorArrayItem> {
     }
 
     '_starting_client_applications: {
-        log!(LogLevel::Info, "Starting client application spawning");
+        log!(
+            LogLevel::Debug,
+            "Spawning {} client applications",
+            client_applications.len()
+        );
 
-        for client_app in &client_applications {
-            let binary_path = PathType::Content(format!("{}/{}", ARTISAN_BIN_DIR, client_app));
-            let working_dir = PathType::Content(format!("/etc/{}", client_app)); // This is the production value
-            // let working_dir = PathType::Content(format!("/opt/artisan/apps/{}", client_app)); // This is the production value
-            // let working_dir = PathType::Content(format!("/tmp"));
+        let mut client_tasks: JoinSet<()> = JoinSet::new();
 
-            // uhhhhhh
-            if let Err(err) = chown(&binary_path, Some(33), Some(33)) {
-                log!(LogLevel::Error, "Failed to chown: {}", err.to_string())
-            };
+        for client_app in client_applications.iter().cloned() {
+            let process_store = system_process_store.clone();
+            client_tasks.spawn(async move {
+                log!(
+                    LogLevel::Debug,
+                    "Launching client application {}",
+                    client_app
+                );
 
-            let mut command = Command::new(binary_path);
-            crate::functions::configure_www_data_command(&mut command);
-            match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
-                Ok(mut child) => {
-                    let pid_result = child.get_pid().await;
+                let binary_path = PathType::Content(format!("{}/{}", ARTISAN_BIN_DIR, client_app));
+                let working_dir = PathType::Content(format!("/etc/{}", client_app));
 
-                    match pid_result {
-                        Ok(pid) => {
-                            log!(LogLevel::Info, "Started: {}:{}", client_app, pid);
+                if let Err(err) = chown(&binary_path, Some(33), Some(33)) {
+                    log!(
+                        LogLevel::Error,
+                        "Failed to chown binary {}: {}",
+                        client_app,
+                        err
+                    );
+                }
 
-                            if let Err(err) = ebpf::register_pid(pid) {
+                let mut command = Command::new(binary_path);
+                crate::functions::configure_www_data_command(&mut command);
+
+                match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
+                    Ok(mut child) => {
+                        match child.get_pid().await {
+                            Ok(pid) => {
                                 log!(
-                                    LogLevel::Warn,
-                                    "Failed to register {} (PID {}) with eBPF tracker: {}",
+                                    LogLevel::Info,
+                                    "Started client app {} with pid {}",
                                     client_app,
-                                    pid,
-                                    err.err_mesg
+                                    pid
                                 );
-                            }
 
-                            if let Err(err) =
-                                crate::pid_persistence::remember_process(client_app, pid).await
-                            {
+                                if let Err(err) = ebpf::register_pid(pid) {
+                                    log!(
+                                        LogLevel::Warn,
+                                        "Failed to register {} (PID {}) with eBPF tracker: {}",
+                                        client_app,
+                                        pid,
+                                        err.err_mesg
+                                    );
+                                }
+
+                                if let Err(err) =
+                                    crate::pid_persistence::remember_process(&client_app, pid).await
+                                {
+                                    log!(
+                                        LogLevel::Error,
+                                        "Failed to persist PID for {}: {}",
+                                        client_app,
+                                        err.err_mesg
+                                    );
+                                }
+                            }
+                            Err(err) => {
                                 log!(
                                     LogLevel::Error,
-                                    "Failed to persist PID for {}: {}",
+                                    "Failed to resolve PID for {}: {}",
                                     client_app,
-                                    err.err_mesg
+                                    err
                                 );
                             }
                         }
-                        Err(err) => {
-                            log!(
-                                LogLevel::Error,
-                                "Failed to resolve PID for {}: {}",
-                                client_app,
-                                err
+
+                        child.monitor_stdx().await;
+                        child.monitor_usage().await;
+                        if let Ok(mut store) = process_store.try_write().await {
+                            store.insert(
+                                client_app.clone(),
+                                definitions::SupervisedProcesses::Child(child),
                             );
                         }
                     }
-
-                    child.monitor_stdx().await;
-                    child.monitor_usage().await;
-                    if let Ok(mut store) = system_process_store.try_write().await {
-                        store.insert(
-                            client_app.clone(),
-                            definitions::SupervisedProcesses::Child(child),
+                    Err(err) => {
+                        log!(
+                            LogLevel::Error,
+                            "Failed to spawn client app {}: {}",
+                            client_app,
+                            err
                         );
                     }
                 }
-                Err(err) => {
-                    log!(LogLevel::Error, "Failed to spawn: {}: {}", client_app, err);
-                    continue;
-                }
-            };
+            });
+        }
+
+        while let Some(result) = client_tasks.join_next().await {
+            if let Err(join_err) = result {
+                log!(
+                    LogLevel::Error,
+                    "Client spawn task join failure: {}",
+                    join_err
+                );
+            }
         }
 
         log!(LogLevel::Info, "Spawned all client applications");
     }
 
     loop {}
-}
-
-// ----- kernel watchdog client -----
-
-const AWDOG_DEV: &str = "/dev/awdog";
-const AWDOG_KEY_LEN: usize = 32;
-const AWDOG_MAC_LEN: usize = 32;
-const AWDOG_MODULE_UUID: [u8; 16] = *b"AWDOGMOD-UUIDv10";
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct AwdogRegister {
-    pid: u32,
-    exe_fingerprint: u64,
-    key_len: u32,
-    key: [u8; AWDOG_KEY_LEN],
-    hb_period_ms: u32,
-    hb_timeout_ms: u32,
-    session_id: u64,
-    proto_ver: u32,
-}
-
-#[repr(C, packed)]
-#[derive(Clone, Copy)]
-struct AwdogHb {
-    monotonic_nonce: u64,
-    pid: u32,
-    exe_fingerprint: u64,
-    ts_ns: u64,
-    mac: [u8; AWDOG_MAC_LEN],
-}
-
-const AWDOG_IOC_MAGIC: u8 = 0xA7;
-const AWDOG_IOCTL_REGISTER_NR: u8 = 0x01;
-const AWDOG_IOCTL_UNREG_NR: u8 = 0x02;
-ioctl_write_ptr!(
-    awdog_ioctl_register,
-    AWDOG_IOC_MAGIC,
-    AWDOG_IOCTL_REGISTER_NR,
-    AwdogRegister
-);
-ioctl_write_ptr!(awdog_ioctl_unreg, AWDOG_IOC_MAGIC, AWDOG_IOCTL_UNREG_NR, u8);
-
-fn start_kernel_watchdog() -> Result<(), ErrorArrayItem> {
-    let root_k = unseal_root_k_from_tpm()?;
-    let kc = hkdf_derive_kc(&root_k, &AWDOG_MODULE_UUID);
-
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(AWDOG_DEV)
-        .map_err(ErrorArrayItem::from)?;
-    let fd = file.as_raw_fd();
-
-    println!(
-        "REGISTER ioctl number: 0x{:x}",
-        nix::request_code_write!(
-            AWDOG_IOC_MAGIC,
-            AWDOG_IOCTL_REGISTER_NR,
-            std::mem::size_of::<AwdogRegister>()
-        )
-    );
-
-    let pid = process::id();
-    let exe_fp = exe_fingerprint();
-    let reg = AwdogRegister {
-        pid,
-        exe_fingerprint: exe_fp,
-        key_len: AWDOG_KEY_LEN as u32,
-        key: kc,
-        hb_period_ms: 2000,
-        hb_timeout_ms: 6000,
-        session_id: 1,
-        proto_ver: 1,
-    };
-
-    unsafe {
-        awdog_ioctl_register(fd, &reg).map_err(|err| {
-            ErrorArrayItem::new(
-                Errors::GeneralError,
-                format!("Watchdog register ioctl failed: {err}"),
-            )
-        })?;
-    }
-
-    let hb_period = Duration::from_millis(reg.hb_period_ms as u64);
-    let hb_key = reg.key;
-
-    thread::Builder::new()
-        .name("awdog-heartbeat".into())
-        .spawn(move || run_heartbeat_loop(file, hb_key, pid, exe_fp, hb_period))
-        .map_err(ErrorArrayItem::from)?;
-
-    Ok(())
-}
-
-fn run_heartbeat_loop(
-    file: std::fs::File,
-    kc: [u8; AWDOG_KEY_LEN],
-    pid: u32,
-    exe_fp: u64,
-    period: Duration,
-) {
-    let mut nonce: u64 = 1;
-
-    loop {
-        let hb = build_hb(&kc, nonce, pid, exe_fp);
-        let hb_bytes = unsafe {
-            std::slice::from_raw_parts(
-                (&hb as *const AwdogHb) as *const u8,
-                std::mem::size_of::<AwdogHb>(),
-            )
-        };
-
-        match unistd::write(&file, hb_bytes) {
-            Ok(wrote) if wrote as usize == hb_bytes.len() => {}
-            Ok(wrote) => {
-                log!(
-                    LogLevel::Warn,
-                    "Partial watchdog heartbeat write ({} of {} bytes)",
-                    wrote,
-                    hb_bytes.len()
-                );
-            }
-            Err(err) => {
-                log!(LogLevel::Error, "Watchdog heartbeat write failed: {}", err);
-                break;
-            }
-        }
-
-        nonce = nonce.wrapping_add(1);
-        thread::sleep(period);
-    }
-
-    let unreg_arg: u8 = 0;
-    unsafe {
-        if let Err(err) = awdog_ioctl_unreg(file.as_raw_fd(), &unreg_arg) {
-            log!(
-                LogLevel::Warn,
-                "Watchdog unregister ioctl failed during shutdown: {}",
-                err
-            );
-        }
-    }
-}
-
-fn hkdf_derive_kc(root_k: &[u8; AWDOG_KEY_LEN], module_uuid: &[u8; 16]) -> [u8; AWDOG_KEY_LEN] {
-    let hk = Hkdf::<Sha256>::new(None, root_k);
-    let mut okm = [0u8; AWDOG_KEY_LEN];
-    let mut info = b"artisan-watchdog v1".to_vec();
-    info.extend_from_slice(module_uuid);
-    hk.expand(&info, &mut okm)
-        .expect("hkdf expand should not fail with fixed output size");
-    okm
-}
-
-fn unseal_root_k_from_tpm() -> Result<[u8; AWDOG_KEY_LEN], ErrorArrayItem> {
-    let mut k = [0u8; AWDOG_KEY_LEN];
-    getrandom(&mut k).map_err(|err| {
-        ErrorArrayItem::new(
-            Errors::GeneralError,
-            format!("Failed to read entropy for watchdog key: {err}"),
-        )
-    })?;
-    Ok(k)
-}
-
-fn exe_fingerprint() -> u64 {
-    0xA1B2C3D4E5F60789u64
-}
-
-fn now_ns() -> u64 {
-    SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64
-}
-
-fn hmac_mac(kc: &[u8; AWDOG_KEY_LEN], hb_no_mac: &[u8]) -> [u8; AWDOG_MAC_LEN] {
-    let mut mac = <Hmac<Sha256>>::new_from_slice(kc).unwrap();
-    mac.update(hb_no_mac);
-    let out = mac.finalize().into_bytes();
-    let mut mac_bytes = [0u8; AWDOG_MAC_LEN];
-    mac_bytes.copy_from_slice(&out);
-    mac_bytes
-}
-
-fn build_hb(kc: &[u8; AWDOG_KEY_LEN], nonce: u64, pid: u32, exe_fp: u64) -> AwdogHb {
-    let ts_ns = now_ns();
-    let mut aad = Vec::with_capacity(8 + 4 + 8 + 8);
-    aad.write_u64::<LittleEndian>(nonce).unwrap();
-    aad.write_u32::<LittleEndian>(pid).unwrap();
-    aad.write_u64::<LittleEndian>(exe_fp).unwrap();
-    aad.write_u64::<LittleEndian>(ts_ns).unwrap();
-
-    let mac = hmac_mac(kc, &aad);
-
-    AwdogHb {
-        monotonic_nonce: nonce,
-        pid,
-        exe_fingerprint: exe_fp,
-        ts_ns,
-        mac,
-    }
 }

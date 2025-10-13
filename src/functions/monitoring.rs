@@ -24,7 +24,7 @@ use std::{
     net::Ipv4Addr,
     time::Duration,
 };
-use tokio::{process::Command, sync::Mutex, task, time};
+use tokio::{process::Command, sync::Mutex, time};
 
 use crate::functions::inventory::generate_safe_client_runner_list;
 use crate::{
@@ -73,6 +73,7 @@ pub async fn monitor_application_states(
     let mut ticker = time::interval(interval);
     loop {
         ticker.tick().await;
+        log!(LogLevel::Trace, "monitor_application_states tick");
         if let Err(err) = refresh_system_statuses_once(&system_status_store, &process_store).await {
             log!(
                 LogLevel::Warn,
@@ -180,6 +181,12 @@ async fn reconcile_process_store_with_state(
         return Ok(());
     }
 
+    log!(
+        LogLevel::Trace,
+        "Reattaching {} with desired pid {}",
+        name,
+        desired_pid
+    );
     match SupervisedProcess::new(Pid::from_raw(pid_i32)) {
         Ok(mut proc) => {
             proc.monitor_usage().await;
@@ -1077,9 +1084,7 @@ pub async fn rebuild_application_stub(
         .any(|system_app| system_app.ais == application)
     {
         let app_name = application.to_string();
-        return match run_blocking_script(move || build_application(&app_name), "build_application")
-            .await
-        {
+        return match build_application(&app_name).await {
             Ok(_) => {
                 log!(
                     LogLevel::Info,
@@ -1099,10 +1104,7 @@ pub async fn rebuild_application_stub(
                     err.err_mesg
                 );
                 let app_name = application.to_string();
-                if let Err(fallback_err) =
-                    run_blocking_script(move || revert_to_vetted(&app_name), "revert_to_vetted")
-                        .await
-                {
+                if let Err(fallback_err) = revert_to_vetted(&app_name).await {
                     log!(
                         LogLevel::Error,
                         "Failed to fall back to vetted binary for {}: {}",
@@ -1133,12 +1135,7 @@ pub async fn rebuild_application_stub(
 
     log!(LogLevel::Info, "Rebuilding client runner: {}", application);
     let runner_name = application.to_string();
-    match run_blocking_script(
-        move || build_runner_binary(&runner_name),
-        "build_runner_binary",
-    )
-    .await
-    {
+    match build_runner_binary(&runner_name).await {
         Ok(_) => Ok(CommandStubResult::new(
             true,
             format!("[stub] rebuild command completed for client app {application}"),
@@ -1151,10 +1148,7 @@ pub async fn rebuild_application_stub(
                 err.err_mesg
             );
             let runner_name = application.to_string();
-            if let Err(fallback_err) =
-                run_blocking_script(move || revert_to_vetted(&runner_name), "revert_to_vetted")
-                    .await
-            {
+            if let Err(fallback_err) = revert_to_vetted(&runner_name).await {
                 log!(
                     LogLevel::Error,
                     "Failed to fallback to vetted binary for {}: {}",
@@ -1171,18 +1165,4 @@ pub async fn rebuild_application_stub(
             ))
         }
     }
-}
-
-async fn run_blocking_script<F, T>(job: F, context: &str) -> Result<T, ErrorArrayItem>
-where
-    F: FnOnce() -> Result<T, ErrorArrayItem> + Send + 'static,
-    T: Send + 'static,
-{
-    let join_result = task::spawn_blocking(job).await.map_err(|err| {
-        ErrorArrayItem::new(
-            Errors::GeneralError,
-            format!("Blocking task failed for {context}: {err}"),
-        )
-    })?;
-    join_result
 }

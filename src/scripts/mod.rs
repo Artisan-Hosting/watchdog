@@ -4,17 +4,24 @@ use std::{
     path::Path,
 };
 
-use artisan_middleware::dusa_collection_utils::core::errors::{ErrorArrayItem, Errors};
+use artisan_middleware::dusa_collection_utils::{
+    core::{
+        errors::{ErrorArrayItem, Errors},
+        logger::LogLevel,
+    },
+    log,
+};
+use tokio::task;
 
 pub mod build;
 pub mod build_runner;
 pub mod clean;
 pub mod revert;
 
-pub use build::build_application;
-pub use build_runner::build_runner_binary;
-pub use clean::clean_cargo_projects;
-pub use revert::revert_to_vetted;
+pub use build::build_application as build_application_sync;
+pub use build_runner::build_runner_binary as build_runner_binary_sync;
+pub use clean::clean_cargo_projects as clean_cargo_projects_sync;
+pub use revert::revert_to_vetted as revert_to_vetted_sync;
 
 pub type ScriptResult<T> = Result<T, ErrorArrayItem>;
 
@@ -60,6 +67,62 @@ pub(crate) fn timestamp_string() -> String {
 
 pub(crate) fn deployment_stamp() -> String {
     chrono::Local::now().format("%Y%m%d-%H%M%S").to_string()
+}
+
+async fn run_script_job<F, T>(label: &'static str, job: F) -> ScriptResult<T>
+where
+    F: FnOnce() -> ScriptResult<T> + Send + 'static,
+    T: Send + 'static,
+{
+    log!(LogLevel::Debug, "Queueing script job: {label}");
+    let join_result = task::spawn_blocking(move || {
+        log!(LogLevel::Trace, "Starting script job: {label}");
+        let result = job();
+        match &result {
+            Ok(_) => log!(LogLevel::Trace, "Script job completed: {label}"),
+            Err(err) => log!(
+                LogLevel::Debug,
+                "Script job {label} failed: {}",
+                err.err_mesg
+            ),
+        }
+        result
+    })
+    .await
+    .map_err(|err| {
+        new_error(
+            Errors::GeneralError,
+            format!("Blocking task panicked for {label}: {err}"),
+        )
+    })?;
+
+    join_result
+}
+
+pub async fn build_application(app_name: &str) -> ScriptResult<()> {
+    let name = app_name.to_string();
+    run_script_job("build_application", move || build::build_application(&name)).await
+}
+
+pub async fn build_runner_binary(runner_name: &str) -> ScriptResult<()> {
+    let name = runner_name.to_string();
+    run_script_job("build_runner_binary", move || {
+        build_runner::build_runner_binary(&name)
+    })
+    .await
+}
+
+pub async fn clean_cargo_projects(app_name: &str) -> ScriptResult<()> {
+    let name = app_name.to_string();
+    run_script_job("clean_cargo_projects", move || {
+        clean::clean_cargo_projects(&name)
+    })
+    .await
+}
+
+pub async fn revert_to_vetted(app_name: &str) -> ScriptResult<()> {
+    let name = app_name.to_string();
+    run_script_job("revert_to_vetted", move || revert::revert_to_vetted(&name)).await
 }
 
 #[cfg(unix)]
