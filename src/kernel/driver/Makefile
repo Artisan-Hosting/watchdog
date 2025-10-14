@@ -26,17 +26,17 @@ sign_devmachine: sign
 
 install: sign
 	@echo "[+] Installing $(MODULE) to /lib/modules/$(shell uname -r)/extra/"
-	sudo mkdir -p /lib/modules/$(shell uname -r)/extra/
-	sudo cp -v "$(MODULE)" /lib/modules/$(shell uname -r)/extra/
-	sudo depmod -a
-	sudo modprobe awdog
+	mkdir -p /lib/modules/$(shell uname -r)/extra/
+	cp -v "$(MODULE)" /lib/modules/$(shell uname -r)/extra/
+	depmod -a
+	modprobe awdog
 	@echo "[✓] awdog module installed and loaded"
 
 uninstall:
 	@echo "[+] Removing awdog module"
-	-sudo modprobe -r awdog
-	-sudo rm -vf /lib/modules/$(shell uname -r)/extra/awdog.ko
-	sudo depmod -a
+	-modprobe -r awdog
+	-rm -vf /lib/modules/$(shell uname -r)/extra/awdog.ko
+	depmod -a
 
 
 # needed to install tmp2-tss-devel on fedora
