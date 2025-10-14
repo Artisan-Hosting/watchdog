@@ -20,12 +20,20 @@ use artisan_middleware::{
     identity::Identifier,
 };
 use byteorder::{LittleEndian, WriteBytesExt};
-use getrandom::getrandom;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use nix::{ioctl_none, ioctl_write_ptr, unistd};
 use prost::Message;
 use sha2::Sha256;
+use std::str::FromStr;
+use std::convert::TryFrom;
+use tss_esapi::{
+    handles::{NvIndexHandle, NvIndexTpmHandle},
+    interface_types::resource_handles::NvAuth,
+    structures::{Auth, MaxNvBuffer},
+    Context, TctiNameConf,
+};
+use tss_esapi::tcti_ldr::DeviceConfig;
 
 /// Character device exposed by the `awdog` kernel module.
 const AWDOG_DEV: &str = "/dev/awdog";
@@ -208,27 +216,76 @@ fn hkdf_derive_kc(root_k: &[u8; AWDOG_KEY_LEN], module_uuid: &[u8; 16]) -> [u8; 
     okm
 }
 
-/// Placeholder TPM interface that currently sources entropy from the system RNG.
+/// Retrieve the watchdog root key from the TPM NV index defined in `tpm_plan.md`.
 fn unseal_root_k_from_tpm() -> Result<[u8; AWDOG_KEY_LEN], ErrorArrayItem> {
-    let mut k = [0u8; AWDOG_KEY_LEN];
-    getrandom(&mut k).map_err(|err| {
+    const ROOT_NV_INDEX: u32 = 0x8100_0010; // see tpm_plan.md for provisioning details
+
+    let tcti = std::env::var("TPM2_TCTI")
+        .ok()
+        .and_then(|raw| TctiNameConf::from_str(&raw).ok())
+        .unwrap_or_else(|| {
+            let config = DeviceConfig::from_str("/dev/tpmrm0").unwrap_or_default();
+            TctiNameConf::Device(config)
+        });
+
+    let mut context = Context::new(tcti).map_err(|err| {
         ErrorArrayItem::new(
             Errors::GeneralError,
-            format!("Failed to read entropy for watchdog key: {err}"),
+            format!("Failed to open TPM context: {err}"),
         )
     })?;
-    Ok(k)
+
+    let nv_handle = NvIndexTpmHandle::new(ROOT_NV_INDEX).map_err(|err| {
+        ErrorArrayItem::new(
+            Errors::GeneralError,
+            format!("Invalid NV index for watchdog root key: {err}"),
+        )
+    })?;
+
+    let nv_index = context
+        .tr_from_tpm_public(nv_handle.into())
+        .map(NvIndexHandle::from)
+        .map_err(|err| {
+            ErrorArrayItem::new(
+                Errors::GeneralError,
+                format!("Failed to load NV index 0x{ROOT_NV_INDEX:08x} from TPM: {err}"),
+            )
+        })?;
+
+    let nv_buffer: MaxNvBuffer = context
+        .execute_with_nullauth_session(|ctx| {
+            let empty_auth = Auth::try_from(Vec::<u8>::new())?;
+            ctx.tr_set_auth(nv_index.into(), empty_auth)?;
+            ctx.nv_read(NvAuth::Owner, nv_index, AWDOG_KEY_LEN as u16, 0)
+        })
+        .map_err(|err| {
+            ErrorArrayItem::new(
+                Errors::GeneralError,
+                format!("Failed to read root key from TPM NV index: {err}"),
+            )
+        })?;
+
+    let value = nv_buffer.value();
+    if value.len() < AWDOG_KEY_LEN {
+        return Err(ErrorArrayItem::new(
+            Errors::GeneralError,
+            format!(
+                "TPM returned insufficient key material: expected {} bytes, got {}",
+                AWDOG_KEY_LEN,
+                value.len()
+            ),
+        ));
+    }
+
+    let mut key = [0u8; AWDOG_KEY_LEN];
+    key.copy_from_slice(&value[..AWDOG_KEY_LEN]);
+    Ok(key)
 }
 
 /// Unique fingerprint for the current binary used by the kernel to detect
 /// tampering. Stubbed for now until a real measurement is wired in.
 #[allow(irrefutable_let_patterns)]
 fn exe_fingerprint() -> u64 {
-    // Just ignore this, it's a fingerprint
-    
-    // current library version 
-    // current software version 
-    // the id value of the current identifier
     let mut stupid_fp: Vec<u8> = Vec::new();
 
     stupid_fp.extend_from_slice(env!("CARGO_PKG_VERSION").as_bytes());

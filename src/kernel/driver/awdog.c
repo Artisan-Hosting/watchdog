@@ -1,36 +1,24 @@
 // SPDX-License-Identifier: GPL-2.0
-// ts is straigh ai right now,
-
 #include "awdog.h"
 #include <crypto/hash.h> // HMAC (shash)
 #include <linux/cdev.h>
 #include <linux/compiler.h>
-#include <linux/build_bug.h>
-#include <linux/cred.h>
 #include <linux/device.h>
-#include <linux/file.h>
 #include <linux/fs.h>
-#include <linux/iversion.h>
 #include <linux/jiffies.h>
 #include <linux/kmod.h>
 #include <linux/math64.h>
-#include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
-#include <linux/pid.h>
 #include <linux/random.h>
-#include <linux/rcupdate.h>
 #include <linux/reboot.h>
-#include <linux/sched/mm.h>
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
-#include <linux/time64.h>
 #include <linux/timekeeping.h>
 #include <linux/timer.h>
 #include <linux/uaccess.h>
-#include <linux/uidgid.h>
 #include <linux/version.h>
 #include <linux/workqueue.h>
 
@@ -49,155 +37,13 @@ static inline int timer_shutdown_sync(struct timer_list *timer) {
 #define DRV_NAME "awdog"
 #define AWDOG_REASON_LEN 64
 
-static struct file *awdog_get_task_exe_file(struct task_struct *task) {
-  struct mm_struct *mm;
-  struct file *exe = NULL;
-
-  mm = get_task_mm(task);
-  if (!mm)
-    return NULL;
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
-  mmap_read_lock(mm);
-#else
-  down_read(&mm->mmap_sem);
-#endif
-
-  if (mm->exe_file) {
-    exe = mm->exe_file;
-    get_file(exe);
-  }
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
-  mmap_read_unlock(mm);
-#else
-  up_read(&mm->mmap_sem);
-#endif
-
-  mmput(mm);
-  return exe;
-}
-
-struct awdog_bin_identity {
-  u64 dev;
-  u64 ino;
-  u64 size;
-  u64 ctime_ns;
-  u64 mtime_ns;
-  u64 iversion;
-};
-
-static u64 awdog_identity_digest(const struct awdog_bin_identity *id) {
-  const u64 fnv_offset = 0xcbf29ce484222325ULL;
-  const u64 fnv_prime = 0x100000001b3ULL;
-  u64 hash = fnv_offset;
-  size_t i;
-
-  BUILD_BUG_ON(sizeof(*id) % sizeof(u64));
-
-  for (i = 0; i < sizeof(*id) / sizeof(u64); i++) {
-    hash ^= ((const u64 *)id)[i];
-    hash *= fnv_prime;
-  }
-
-  return hash;
-}
-
-static bool awdog_identity_equal(const struct awdog_bin_identity *a,
-                                 const struct awdog_bin_identity *b) {
-  return a->dev == b->dev && a->ino == b->ino && a->size == b->size &&
-         a->ctime_ns == b->ctime_ns && a->mtime_ns == b->mtime_ns &&
-         a->iversion == b->iversion;
-}
-
-static int awdog_identity_from_file(struct file *exe,
-                                    struct awdog_bin_identity *out,
-                                    u64 *fingerprint) {
-  struct inode *inode;
-  struct timespec64 ctime;
-  struct timespec64 mtime;
-
-  if (!exe || !out)
-    return -EINVAL;
-
-  inode = file_inode(exe);
-  if (!inode)
-    return -ENOENT;
-
-  memset(out, 0, sizeof(*out));
-  out->dev = (u64)inode->i_sb->s_dev;
-  out->ino = (u64)inode->i_ino;
-  out->size = (u64)i_size_read(inode);
-
-  ctime = inode_get_ctime(inode);
-  mtime = inode_get_mtime(inode);
-  out->ctime_ns = timespec64_to_ns(&ctime);
-  out->mtime_ns = timespec64_to_ns(&mtime);
-#ifdef CONFIG_FS_I_VERSION
-  out->iversion = inode_query_iversion(inode);
-#else
-  out->iversion = 0;
-#endif
-
-  if (fingerprint)
-    *fingerprint = awdog_identity_digest(out);
-
-  return 0;
-}
-
-static int awdog_fetch_identity(u32 pid, struct awdog_bin_identity *out,
-                                u64 *fingerprint, kuid_t *owner_uid) {
-  struct task_struct *task;
-  struct pid *pid_struct;
-  struct file *exe;
-  const struct cred *cred;
-  int ret;
-
-  rcu_read_lock();
-  pid_struct = find_vpid(pid);
-  if (!pid_struct) {
-    rcu_read_unlock();
-    return -ESRCH;
-  }
-
-  task = get_pid_task(pid_struct, PIDTYPE_PID);
-  if (!task) {
-    rcu_read_unlock();
-    return -ESRCH;
-  }
-
-  get_task_struct(task);
-  rcu_read_unlock();
-
-  exe = awdog_get_task_exe_file(task);
-  if (!exe) {
-    ret = -ENOENT;
-    goto out_put_task;
-  }
-
-  ret = awdog_identity_from_file(exe, out, fingerprint);
-
-  if (!ret && owner_uid) {
-    cred = get_task_cred(task);
-    *owner_uid = cred->uid;
-    put_cred(cred);
-  }
-
-  fput(exe);
-out_put_task:
-  put_task_struct(task);
-  return ret;
-}
-
 struct awdog_ctx {
   struct mutex lock;    /* serialize register/hb/unreg */
   spinlock_t work_lock; /* protects queued work reasons */
   bool registered;
   u32 pid;
-  kuid_t uid;
   u64 exe_fp;
-  struct awdog_bin_identity bin_id;
-  bool bin_id_valid;
+  bool exe_fp_locked;
   u8 key[AWDOG_KEY_LEN];
   u32 hb_period_ms;
   u32 hb_timeout_ms;
@@ -341,42 +187,26 @@ static void awdog_timeout(struct timer_list *t) {
 }
 
 static bool awdog_sanity_pid_exe(u32 pid, u64 exe_fp) {
-  struct awdog_bin_identity current_id;
-  kuid_t owner_uid;
-  u64 kernel_fp;
-  int ret;
-
-  if (pid != g.pid)
+  if (!g.registered)
     return false;
 
-  ret = awdog_fetch_identity(pid, &current_id, &kernel_fp, &owner_uid);
-  if (ret) {
-    pr_warn(DRV_NAME ": failed to refresh binary identity for pid=%u (%d)\n",
-            pid, ret);
+  if (pid != g.pid) {
+    pr_warn(DRV_NAME ": heartbeat pid mismatch (expected=%u got=%u)\n",
+            g.pid, pid);
     return false;
   }
 
-  if (!uid_eq(owner_uid, g.uid)) {
-    pr_warn(DRV_NAME ": uid mismatch for pid=%u (expected=%u actual=%u)\n",
-            pid, __kuid_val(g.uid), __kuid_val(owner_uid));
-    return false;
+  if (!g.exe_fp_locked) {
+    g.exe_fp = exe_fp;
+    g.exe_fp_locked = true;
+    pr_info(DRV_NAME ": locking fingerprint to %llx\n", exe_fp);
+    return true;
   }
 
   if (exe_fp != g.exe_fp) {
-    pr_warn(DRV_NAME ": heartbeat fingerprint mismatch pid=%u registered=%llx hb=%llx kernel=%llx\n",
-            pid, g.exe_fp, exe_fp, kernel_fp);
+    pr_warn(DRV_NAME ": heartbeat fingerprint mismatch pid=%u expected=%llx got=%llx\n",
+            pid, g.exe_fp, exe_fp);
     return false;
-  }
-
-  if (g.bin_id_valid) {
-    if (!awdog_identity_equal(&g.bin_id, &current_id)) {
-      pr_warn(DRV_NAME ": executable metadata drift detected for pid=%u (expected=%llx current=%llx)\n",
-              pid, awdog_identity_digest(&g.bin_id), kernel_fp);
-      return false;
-    }
-  } else {
-    g.bin_id = current_id;
-    g.bin_id_valid = true;
   }
 
   return true;
@@ -448,11 +278,6 @@ static long awdog_ioctl(struct file *f, unsigned int cmd, unsigned long arg) {
   switch (cmd) {
   case AWDOG_IOCTL_REGISTER: {
     struct awdog_register r;
-    struct awdog_bin_identity identity;
-    kuid_t proc_uid = current_uid();
-    u64 kernel_fp = 0;
-    bool identity_ok = false;
-    int id_ret;
     if (copy_from_user(&r, (void __user *)arg, sizeof(r)))
       return -EFAULT;
     if (r.key_len != AWDOG_KEY_LEN || r.hb_timeout_ms < r.hb_period_ms)
@@ -460,36 +285,27 @@ static long awdog_ioctl(struct file *f, unsigned int cmd, unsigned long arg) {
 
     mutex_lock(&g.lock);
 
-    id_ret = awdog_fetch_identity(r.pid, &identity, &kernel_fp, &proc_uid);
-    if (!id_ret) {
-      if (kernel_fp != r.exe_fingerprint) {
-        pr_warn(DRV_NAME
-                ": register fingerprint mismatch pid=%u user=%llx kernel=%llx\n",
-                r.pid, r.exe_fingerprint, kernel_fp);
-      }
-      identity_ok = true;
-    } else {
-      pr_warn(DRV_NAME ": unable to derive executable identity for pid=%u (%d)\n",
-              r.pid, id_ret);
-      proc_uid = current_uid();
+    if (g.exe_fp_locked && r.exe_fingerprint != g.exe_fp) {
+      mutex_unlock(&g.lock);
+      pr_warn(DRV_NAME ": rejected re-register pid=%u fingerprint %llx (expected %llx)\n",
+              r.pid, r.exe_fingerprint, g.exe_fp);
+      return -EPERM;
+    }
+
+    if (!g.exe_fp_locked) {
+      g.exe_fp = r.exe_fingerprint;
+      g.exe_fp_locked = true;
+      pr_info(DRV_NAME ": canonical fingerprint set to %llx\n", g.exe_fp);
     }
 
     memcpy(g.key, r.key, AWDOG_KEY_LEN);
     g.pid = r.pid;
-    g.uid = proc_uid;
-    g.exe_fp = r.exe_fingerprint;
     g.hb_period_ms = r.hb_period_ms;
     g.hb_timeout_ms = r.hb_timeout_ms;
     g.session_id = r.session_id;
     g.proto_ver = r.proto_ver;
     g.last_nonce = 0;
     g.last_hb_mono_ns = 0;
-    g.bin_id_valid = false;
-    memset(&g.bin_id, 0, sizeof(g.bin_id));
-    if (identity_ok) {
-      g.bin_id = identity;
-      g.bin_id_valid = true;
-    }
     g.registered = true;
     memset(g.reboot_reason, 0, sizeof(g.reboot_reason));
     memset(g.sos_reason, 0, sizeof(g.sos_reason));
@@ -505,12 +321,8 @@ static long awdog_ioctl(struct file *f, unsigned int cmd, unsigned long arg) {
     memset(g.key, 0, AWDOG_KEY_LEN);
     g.registered = false;
     g.pid = 0;
-    g.uid = GLOBAL_ROOT_UID;
-    g.exe_fp = 0;
     g.last_nonce = 0;
     g.last_hb_mono_ns = 0;
-    memset(&g.bin_id, 0, sizeof(g.bin_id));
-    g.bin_id_valid = false;
     memset(g.reboot_reason, 0, sizeof(g.reboot_reason));
     memset(g.sos_reason, 0, sizeof(g.sos_reason));
     timer_shutdown_sync(&g.timer);
