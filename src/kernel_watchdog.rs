@@ -218,7 +218,7 @@ fn hkdf_derive_kc(root_k: &[u8; AWDOG_KEY_LEN], module_uuid: &[u8; 16]) -> [u8; 
 
 /// Retrieve the watchdog root key from the TPM NV index defined in `tpm_plan.md`.
 fn unseal_root_k_from_tpm() -> Result<[u8; AWDOG_KEY_LEN], ErrorArrayItem> {
-    const ROOT_NV_INDEX: u32 = 0x8100_0010; // see tpm_plan.md for provisioning details
+    const ROOT_NV_INDEX: u32 = 0x0150_0020; // see tpm_plan.md for provisioning details
 
     let tcti = std::env::var("TPM2_TCTI")
         .ok()
