@@ -7,18 +7,6 @@ MOKDIR := $(HOME)/mok
 SIGN_PRIV := $(MOKDIR)/MOK.priv
 SIGN_DER  := $(MOKDIR)/MOK.der
 
-# find sign-file dynamically
-SIGN_TOOL := $(shell \
-	if [ -x /usr/src/linux-headers-$(uname -r)/scripts/sign-file ]; then \
-		echo /usr/src/linux-headers-$(uname -r)/scripts/sign-file; \
-	elif [ -x /usr/lib/modules/$(uname -r)/build/scripts/sign-file ]; then \
-		echo /usr/lib/modules/$(uname -r)/build/scripts/sign-file; \
-	elif [ -x /usr/src/kernels/$(uname -r)/scripts/sign-file ]; then \
-		echo /usr/src/kernels/$(uname -r)/scripts/sign-file; \
-	else \
-		echo "sign-file-not-found"; \
-	fi)
-
 .PHONY: all clean sign sign_production sign_devmachine install uninstall
 
 all:
@@ -29,9 +17,7 @@ clean:
 
 sign:
 	@echo "[+] Signing $(MODULE)"
-	@if [ "$(SIGN_TOOL)" = "sign-file-not-found" ]; then \
-		echo "[-] sign-file not found for kernel $(shell uname -r)"; exit 1; fi
-	sudo "$(SIGN_TOOL)" sha256 "$(SIGN_PRIV)" "$(SIGN_DER)" "$(MODULE)"
+	sign-file sha256 "$(SIGN_PRIV)" "$(SIGN_DER)" "$(MODULE)"
 	@modinfo "$(MODULE)" | egrep 'signer|sig_key|sig_hashalgo'
 
 sign_production: sign
