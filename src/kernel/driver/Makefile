@@ -15,8 +15,8 @@ clean:
 
 sign_production: 
 	SIGN=$(echo /usr/src/linux-headers-$(uname -r)/scripts/sign-file)
-	"$SIGN" sha256 ~/mok/MOK.priv ~/mok/MOK.der "$MODULE"
-	modinfo "$MODULE" | egrep 'signer|sig_key|sig_hashalgo'
+	$SIGN sha256 ~/mok/MOK.priv ~/mok/MOK.der $MODULE
+	modinfo $MODULE | egrep 'signer|sig_key|sig_hashalgo'
 
 sign_devmachine: 
 	SIGN=$(echo /usr/lib/modules/$(uname -r)/build/scripts/sign-file)
