@@ -6,24 +6,25 @@
 //! and easier to maintain.
 
 use std::{
-    fs::OpenOptions,
-    os::fd::AsRawFd,
-    process, thread,
-    time::{Duration, Instant, SystemTime},
+    fs::OpenOptions, hash::{DefaultHasher, Hash, Hasher}, os::fd::AsRawFd, process, thread, time::{Duration, Instant, SystemTime}
 };
 
-use artisan_middleware::dusa_collection_utils::{
-    core::{
-        errors::{ErrorArrayItem, Errors},
-        logger::LogLevel,
+use artisan_middleware::{
+    dusa_collection_utils::{
+        core::{
+            errors::{ErrorArrayItem, Errors},
+            logger::LogLevel,
+        },
+        log,
     },
-    log,
+    identity::Identifier,
 };
 use byteorder::{LittleEndian, WriteBytesExt};
 use getrandom::getrandom;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use nix::{ioctl_none, ioctl_write_ptr, unistd};
+use prost::Message;
 use sha2::Sha256;
 
 /// Character device exposed by the `awdog` kernel module.
@@ -221,8 +222,37 @@ fn unseal_root_k_from_tpm() -> Result<[u8; AWDOG_KEY_LEN], ErrorArrayItem> {
 
 /// Unique fingerprint for the current binary used by the kernel to detect
 /// tampering. Stubbed for now until a real measurement is wired in.
+#[allow(irrefutable_let_patterns)]
 fn exe_fingerprint() -> u64 {
-    0xA1B2C3D4E5F60789u64
+    // Just ignore this, it's a fingerprint
+    
+    // current library version 
+    // current software version 
+    // the id value of the current identifier
+    let mut stupid_fp: Vec<u8> = Vec::new();
+
+    stupid_fp.extend_from_slice(env!("CARGO_PKG_VERSION").as_bytes());
+
+    if let val = artisan_middleware::version::aml_version().encode() {
+        let upper = (val >> 8) as u8;
+        let lower = (val & 0xFF) as u8;
+        stupid_fp.push(upper);
+        stupid_fp.push(lower);
+    }
+
+    let baseline = stupid_fp.len();
+
+    if let Ok(identity) = Identifier::load_from_file() {
+        stupid_fp.extend_from_slice(&identity.id.encode_to_vec());
+    }
+
+    if stupid_fp.len() == baseline {
+        log!(LogLevel::Warn, "May have failed to load identity file");
+    }
+
+    let mut hasher = DefaultHasher::new();
+    stupid_fp.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Current system time expressed as nanoseconds since the Unix epoch.
