@@ -250,21 +250,18 @@ static int awdog_run_soscall(const char *reason) {
 
     pr_emerg("awdog: tamper tripped: %s\n", why);
 
-    /*
-     * Best effort: if userspace is alive, this will flush logs and
-     * remount RO via SysRq. If it fails, we’ll fall back below.
-     */
+
     int rc = call_usermodehelper(argv[0], argv, envp, UMH_WAIT_PROC);
 
-    if (rc) {
-        /* Fallback when userspace is toast: do what we can in-kernel. */
-        pr_emerg("awdog: usermode helper failed (%d), using emergency fallback\n", rc);
+    // if (rc) {  ahpn is missing some modules or headers to use this, skipping for now
+    //     /* Fallback when userspace is toast: do what we can in-kernel. */
+    //     pr_emerg("awdog: usermode helper failed (%d), using emergency fallback\n", rc);
 
-        /* 1) Try to push data */
-        emergency_sync();          /* if available in your kernel */
-        /* 2) Try to remount RO all filesystems */
-        emergency_remount();       /* likewise; some trees call it emergency_remount_ro() */
-    }
+    //     /* 1) Try to push data */
+    //     emergency_sync();          /* if available in your kernel */
+    //     /* 2) Try to remount RO all filesystems */
+    //     emergency_remount();       /* likewise; some trees call it emergency_remount_ro() */
+    // }
 
     return rc;
 }
