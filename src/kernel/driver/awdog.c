@@ -15,9 +15,9 @@
 #include <linux/mutex.h>
 #include <linux/random.h>
 #include <linux/reboot.h>
-#include <linux/spinlock.h>
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
+#include <linux/spinlock.h>
 #include <linux/string.h>
 #include <linux/timekeeping.h>
 #include <linux/timer.h>
@@ -41,7 +41,7 @@ static inline int timer_shutdown_sync(struct timer_list *timer) {
 #define AWDOG_REASON_LEN 64
 
 struct awdog_ctx {
-  struct mutex lock; /* serialize register/hb/unreg */
+  struct mutex lock;    /* serialize register/hb/unreg */
   spinlock_t work_lock; /* protects queued work reasons */
   bool registered;
   u32 pid;
@@ -114,8 +114,8 @@ static void awdog_reboot_workfn(struct work_struct *work) {
   if (!reason[0])
     strscpy(reason, "unknown", sizeof(reason));
 
-  // awdog_run_reboot(reason);
-  awdog_run_ko_test(reason);
+  awdog_run_reboot(reason);
+  // awdog_run_ko_test(reason);
 }
 
 static void awdog_soscall_workfn(struct work_struct *work) {
@@ -351,8 +351,8 @@ out:
     pr_warn(DRV_NAME ": bad heartbeat (%d), triggering saver+reboot\n", ret);
     if (awdog_run_soscall("verify-failed"))
       pr_err(DRV_NAME ": saver helper failed (verify-failed)\n");
-    // awdog_run_reboot("verify-failed");
-      awdog_run_ko_test("verify-failed");
+    awdog_run_reboot("verify-failed");
+    // awdog_run_ko_test("verify-failed");
   }
   return ret;
 }
