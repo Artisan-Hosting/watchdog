@@ -1,0 +1,3 @@
+[submodule "src/kernel_watchdog"]
+	path = src/kernel_watchdog
+	url = https://github.com/Artisan-Hosting/kernel_watchdog.git
