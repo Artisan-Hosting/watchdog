@@ -45,6 +45,10 @@ const WWW_DATA_GID: u32 = 33;
 const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const STATE_STALE_THRESHOLD_SECONDS: u64 = 30;
 const WATCHDOG_DECLARED_DEAD_MESSAGE: &str = "watchdog declared dead";
+const RESOURCE_MONITOR_MAX_STALENESS: Duration = Duration::from_secs(20);
+const RESOURCE_MONITOR_MAX_CONSECUTIVE_FAILURES: u64 = 5;
+const STDX_MONITOR_MAX_STALENESS: Duration = Duration::from_secs(30);
+const STDX_MONITOR_MAX_CONSECUTIVE_FAILURES: u64 = 8;
 
 static LAST_SEEN_STATE_PIDS: Lazy<Mutex<HashMap<String, u32>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -546,9 +550,9 @@ async fn collect_process_observations(
     process_store: &definitions::ChildProcessArray,
     name: &str,
 ) -> Result<ProcessObservations, ErrorArrayItem> {
-    let processes = process_store.try_read().await?;
-    let observations = if let Some(process) = processes.get(name) {
-        observe_supervised_process(process).await?
+    let mut processes = process_store.try_write().await?;
+    let observations = if let Some(process) = processes.get_mut(name) {
+        observe_supervised_process(name, process).await?
     } else {
         ProcessObservations::default()
     };
@@ -557,12 +561,63 @@ async fn collect_process_observations(
 }
 
 async fn observe_supervised_process(
-    process: &definitions::SupervisedProcesses,
+    name: &str,
+    process: &mut definitions::SupervisedProcesses,
 ) -> Result<ProcessObservations, ErrorArrayItem> {
     let mut observations = ProcessObservations::default();
 
     match process {
         definitions::SupervisedProcesses::Child(child) => {
+            if !child.resource_monitor_valid(
+                RESOURCE_MONITOR_MAX_STALENESS,
+                RESOURCE_MONITOR_MAX_CONSECUTIVE_FAILURES,
+            ) {
+                let snapshot = child.resource_watchdog_snapshot();
+                log!(
+                    LogLevel::Warn,
+                    "Resource monitor watchdog unhealthy for {} (running={}, starts={}, last_heartbeat_ms={}, consecutive_failures={}); restarting monitor",
+                    name,
+                    snapshot.running,
+                    snapshot.start_count,
+                    snapshot.last_heartbeat_unix_ms,
+                    snapshot.consecutive_failures
+                );
+                child.terminate_monitor();
+                child.monitor_usage().await;
+            } else if !child.monitoring() {
+                log!(
+                    LogLevel::Warn,
+                    "Resource monitor task not running for {}; restarting monitor",
+                    name
+                );
+                child.monitor_usage().await;
+            }
+
+            if !child.stdx_monitor_valid(
+                STDX_MONITOR_MAX_STALENESS,
+                STDX_MONITOR_MAX_CONSECUTIVE_FAILURES,
+            ) {
+                let snapshot = child.stdx_watchdog_snapshot();
+                log!(
+                    LogLevel::Warn,
+                    "Stdx monitor watchdog unhealthy for {} (running={}, starts={}, last_heartbeat_ms={}, consecutive_failures={}); restarting monitor",
+                    name,
+                    snapshot.running,
+                    snapshot.start_count,
+                    snapshot.last_heartbeat_unix_ms,
+                    snapshot.consecutive_failures
+                );
+                child.terminate_stdx();
+                child.monitor_stdx().await;
+            } else if !child.monitoring_stdx() {
+                log!(
+                    LogLevel::Warn,
+                    "Stdx monitor task not running for {}; restarting monitor",
+                    name
+                );
+                child.monitor_stdx().await;
+            }
+
             if let Ok(metrics) = child.get_metrics().await {
                 observations.metrics = Some(metrics);
             }
@@ -577,6 +632,31 @@ async fn observe_supervised_process(
             }
         }
         definitions::SupervisedProcesses::Process(proc) => {
+            if !proc.resource_monitor_valid(
+                RESOURCE_MONITOR_MAX_STALENESS,
+                RESOURCE_MONITOR_MAX_CONSECUTIVE_FAILURES,
+            ) {
+                let snapshot = proc.resource_watchdog_snapshot();
+                log!(
+                    LogLevel::Warn,
+                    "Resource monitor watchdog unhealthy for {} (running={}, starts={}, last_heartbeat_ms={}, consecutive_failures={}); restarting monitor",
+                    name,
+                    snapshot.running,
+                    snapshot.start_count,
+                    snapshot.last_heartbeat_unix_ms,
+                    snapshot.consecutive_failures
+                );
+                proc.terminate_monitor();
+                proc.monitor_usage().await;
+            } else if !proc.monitoring() {
+                log!(
+                    LogLevel::Warn,
+                    "Resource monitor task not running for {}; restarting monitor",
+                    name
+                );
+                proc.monitor_usage().await;
+            }
+
             if let Ok(metrics) = proc.get_metrics().await {
                 observations.metrics = Some(metrics);
             }
