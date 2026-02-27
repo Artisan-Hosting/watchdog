@@ -6,7 +6,11 @@
 //! and easier to maintain.
 
 use std::{
-    fs::OpenOptions, hash::{DefaultHasher, Hash, Hasher}, os::fd::AsRawFd, process, thread, time::{Duration, Instant, SystemTime}
+    fs::OpenOptions,
+    hash::{DefaultHasher, Hash, Hasher},
+    os::fd::AsRawFd,
+    process, thread,
+    time::{Duration, Instant, SystemTime},
 };
 
 use artisan_middleware::{
@@ -25,15 +29,15 @@ use hmac::{Hmac, Mac};
 use nix::{ioctl_none, ioctl_write_ptr, unistd};
 use prost::Message;
 use sha2::Sha256;
-use std::str::FromStr;
 use std::convert::TryFrom;
+use std::str::FromStr;
+use tss_esapi::tcti_ldr::DeviceConfig;
 use tss_esapi::{
+    Context, TctiNameConf,
     handles::{NvIndexHandle, NvIndexTpmHandle},
     interface_types::resource_handles::NvAuth,
     structures::{Auth, MaxNvBuffer},
-    Context, TctiNameConf,
 };
-use tss_esapi::tcti_ldr::DeviceConfig;
 
 /// Character device exposed by the `awdog` kernel module.
 const AWDOG_DEV: &str = "/dev/awdog";

@@ -1,4 +1,5 @@
 use artisan_middleware::{
+    aggregator::Status,
     dusa_collection_utils::{
         core::{
             errors::{ErrorArrayItem, Errors},
@@ -42,6 +43,8 @@ const WWW_DATA_NVM_DIR: &str = "/var/www/.nvm";
 const WWW_DATA_UID: u32 = 33;
 const WWW_DATA_GID: u32 = 33;
 const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const STATE_STALE_THRESHOLD_SECONDS: u64 = 30;
+const WATCHDOG_DECLARED_DEAD_MESSAGE: &str = "watchdog declared dead";
 
 static LAST_SEEN_STATE_PIDS: Lazy<Mutex<HashMap<String, u32>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -127,18 +130,49 @@ async fn clear_last_seen_pid(name: &str) {
 fn should_track_state(state: &AppState) -> bool {
     matches!(
         state.status,
-        artisan_middleware::aggregator::Status::Running
-            | artisan_middleware::aggregator::Status::Starting
-            | artisan_middleware::aggregator::Status::Idle
-            | artisan_middleware::aggregator::Status::Warning
+        Status::Running | Status::Starting | Status::Idle | Status::Warning
     )
+}
+
+fn mark_state_dead_if_stale(name: &str, state: &mut AppState) {
+    let now = current_timestamp_wrapper();
+    let age_seconds = now.saturating_sub(state.last_updated);
+    if age_seconds < STATE_STALE_THRESHOLD_SECONDS {
+        return;
+    }
+
+    state.data = WATCHDOG_DECLARED_DEAD_MESSAGE.to_string();
+    state.status = Status::Stopped;
+    state.pid = 0;
+    state.last_updated = now;
+
+    if state
+        .stderr
+        .last()
+        .map(|(_, message)| message.as_str() == WATCHDOG_DECLARED_DEAD_MESSAGE)
+        != Some(true)
+    {
+        state
+            .stderr
+            .push((now, WATCHDOG_DECLARED_DEAD_MESSAGE.to_string()));
+    }
+
+    log!(
+        LogLevel::Warn,
+        "State snapshot for {} is stale by {}s (threshold {}s); marking as stopped",
+        name,
+        age_seconds,
+        STATE_STALE_THRESHOLD_SECONDS
+    );
 }
 
 async fn reconcile_process_store_with_state(
     process_store: &definitions::ChildProcessArray,
     name: &str,
-    state: &AppState,
+    state: &mut AppState,
 ) -> Result<(), ErrorArrayItem> {
+    mark_state_dead_if_stale(name, state);
+
     if !should_track_state(state) || state.pid == 0 {
         clear_last_seen_pid(name).await;
         return Ok(());
@@ -256,8 +290,8 @@ async fn refresh_system_statuses_once(
 
     for app in definitions::CRITICAL_APPLICATIONS.iter() {
         known_names.insert(app.ais.to_string());
-        let state = load_state_snapshot(app).await;
-        if let Some(ref snapshot) = state {
+        let mut state = load_state_snapshot(app).await;
+        if let Some(snapshot) = state.as_mut() {
             if let Err(err) =
                 reconcile_process_store_with_state(process_store, app.ais, snapshot).await
             {
@@ -296,14 +330,14 @@ async fn refresh_system_statuses_once(
                 continue;
             }
 
-            if let Some(state) = load_state_snapshot_by_name(ais_name).await {
+            if let Some(mut state) = load_state_snapshot_by_name(ais_name).await {
                 if !state.system_application {
                     clear_last_seen_pid(ais_name).await;
                     continue;
                 }
 
                 if let Err(err) =
-                    reconcile_process_store_with_state(process_store, ais_name, &state).await
+                    reconcile_process_store_with_state(process_store, ais_name, &mut state).await
                 {
                     log!(
                         LogLevel::Warn,
@@ -365,8 +399,8 @@ async fn refresh_client_statuses_once(
     for name in process_names {
         known_names.insert(name.clone());
 
-        let state = load_state_snapshot_by_name(&name).await;
-        if let Some(ref snapshot) = state {
+        let mut state = load_state_snapshot_by_name(&name).await;
+        if let Some(snapshot) = state.as_mut() {
             if snapshot.system_application {
                 clear_last_seen_pid(&name).await;
                 continue;
@@ -410,14 +444,15 @@ async fn refresh_client_statuses_once(
                     continue;
                 }
 
-                if let Some(state) = load_state_snapshot_by_name(ais_name).await {
+                if let Some(mut state) = load_state_snapshot_by_name(ais_name).await {
                     if state.system_application {
                         clear_last_seen_pid(ais_name).await;
                         continue;
                     }
 
                     if let Err(err) =
-                        reconcile_process_store_with_state(process_store, ais_name, &state).await
+                        reconcile_process_store_with_state(process_store, ais_name, &mut state)
+                            .await
                     {
                         log!(
                             LogLevel::Warn,
