@@ -17,6 +17,19 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+const (
+	aisPrefix  = "ais_"
+	appManager = "manager"
+	appGitmon  = "gitmon"
+	appMailler = "mailler"
+)
+
+var systemApplications = map[string]struct{}{
+	aisPrefix + appManager: {},
+	aisPrefix + appGitmon:  {},
+	aisPrefix + appMailler: {},
+}
+
 func main() {
 	socketPath := flag.String("socket", "/tmp/artisan_watchdog.sock", "Path to gRPC Unix socket")
 	flag.Parse()
@@ -106,10 +119,41 @@ func listApplications(ctx context.Context, client pb.WatchdogClient) {
 		fmt.Println("No applications found.")
 		return
 	}
+
+	systemApps := make([]*pb.ApplicationStatusMessage, 0)
+	clientApps := make([]*pb.ApplicationStatusMessage, 0)
+
 	for _, app := range resp.Applications {
-		fmt.Printf("%-20s %-10s CPU: %.1f%% Mem: %.1f MB\n",
-			app.Name, app.Status, app.CpuUsage, app.MemoryUsage)
+		if isSystemApplication(app.Name) {
+			systemApps = append(systemApps, app)
+			continue
+		}
+		clientApps = append(clientApps, app)
 	}
+
+	if len(systemApps) > 0 {
+		fmt.Println("System Applications:")
+		for _, app := range systemApps {
+			fmt.Printf("  %-20s %-10s CPU: %.1f%% Mem: %.1f MB\n",
+				app.Name, app.Status, app.CpuUsage, app.MemoryUsage)
+		}
+	}
+
+	if len(clientApps) > 0 {
+		if len(systemApps) > 0 {
+			fmt.Println()
+		}
+		fmt.Println("Client Applications:")
+		for _, app := range clientApps {
+			fmt.Printf("  %-20s %-10s CPU: %.1f%% Mem: %.1f MB\n",
+				app.Name, app.Status, app.CpuUsage, app.MemoryUsage)
+		}
+	}
+}
+
+func isSystemApplication(name string) bool {
+	_, ok := systemApplications[name]
+	return ok
 }
 
 func getSystemInfo(ctx context.Context, client pb.WatchdogClient) {
