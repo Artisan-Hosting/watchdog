@@ -158,7 +158,14 @@ async fn main() -> Result<(), ErrorArrayItem> {
     {
         log!(LogLevel::Debug, "Launching usage ledger persistence task");
         tokio::spawn(async move {
-            ledger::run_persistence_loop(Duration::from_secs(10)).await;
+            ledger::run_persistence_loop(Duration::from_secs(300)).await;
+        });
+    }
+
+    {
+        log!(LogLevel::Debug, "Launching daily usage ledger archive task");
+        tokio::spawn(async move {
+            ledger::run_daily_archive_loop().await;
         });
     }
 
@@ -661,6 +668,14 @@ async fn main() -> Result<(), ErrorArrayItem> {
     }
 
     log!(LogLevel::Debug, "Shutdown signal handled; exiting main");
+
+    if let Err(err) = ledger::persist().await {
+        log!(
+            LogLevel::Warn,
+            "Failed to persist usage ledger during shutdown: {}",
+            err.err_mesg
+        );
+    }
 
     Ok(())
 }

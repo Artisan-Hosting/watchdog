@@ -368,6 +368,7 @@ async fn ensure_resource_monitor_healthy_for_process(name: &str, proc: &mut Supe
 
 async fn compute_network_usage_for_pid(name: &str, pid: u32) -> Option<NetworkUsage> {
     let network_pids = collect_network_tree_pids(pid);
+    register_network_tree_pids(name, &network_pids).await;
     aggregate_network_usage_for_pids(name, &network_pids)
 }
 
@@ -846,10 +847,6 @@ async fn observe_supervised_process(
 
     match process {
         definitions::SupervisedProcesses::Child(child) => {
-            if let Ok(metrics) = child.get_metrics().await {
-                observations.metrics = Some(metrics);
-            }
-            backfill_tree_usage_metrics(name, &child.monitor, &mut observations.metrics).await;
             if let Ok(stdout) = child.get_std_out().await {
                 observations.stdout = Some(stdout);
             }
@@ -861,26 +858,12 @@ async fn observe_supervised_process(
             }
         }
         definitions::SupervisedProcesses::Process(proc) => {
-            if let Ok(metrics) = proc.get_metrics().await {
-                observations.metrics = Some(metrics);
-            }
-            backfill_tree_usage_metrics(name, &proc.monitor, &mut observations.metrics).await;
             observations.pid = Some(proc.get_pid() as u32);
         }
     }
 
-    if let Some(pid) = observations.pid {
-        if let Some(usage) = compute_network_usage_for_pid(name, pid).await {
-            if let Some(metrics) = observations.metrics.as_mut() {
-                metrics.other = Some(usage);
-            } else {
-                observations.metrics = Some(Metrics {
-                    cpu_usage: 0.0,
-                    memory_usage: 0.0,
-                    other: Some(usage),
-                });
-            }
-        }
+    if let Some(metrics) = ledger::latest_metrics(name).await {
+        observations.metrics = Some(metrics);
     }
 
     Ok(observations)
@@ -972,6 +955,20 @@ fn collect_network_tree_pids(root_pid: u32) -> Vec<u32> {
             out
         }
         Err(_) => vec![root_pid],
+    }
+}
+
+async fn register_network_tree_pids(name: &str, pids: &[u32]) {
+    for pid in pids {
+        if let Err(err) = ebpf::register_pid_with_retry(*pid).await {
+            log!(
+                LogLevel::Trace,
+                "Failed to register network-tracked PID {} for {}: {}",
+                pid,
+                name,
+                err.err_mesg
+            );
+        }
     }
 }
 
