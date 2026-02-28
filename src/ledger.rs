@@ -16,7 +16,7 @@ use artisan_middleware::{
     },
     historics::UsageLedger,
 };
-use chrono::{Datelike, Local, TimeZone};
+use chrono::{Datelike, Local, LocalResult, TimeZone};
 use once_cell::sync::Lazy;
 use tokio::{sync::RwLock, time};
 
@@ -154,9 +154,19 @@ fn archive_file_path() -> PathBuf {
 fn duration_until_next_midnight() -> Duration {
     let now = Local::now();
     let tomorrow = now.date_naive() + chrono::Duration::days(1);
-    let midnight = Local
-        .with_ymd_and_hms(tomorrow.year(), tomorrow.month(), tomorrow.day(), 0, 0, 0);
-        // .expect("valid midnight timestamp");
+    let midnight = match Local.with_ymd_and_hms(
+        tomorrow.year(),
+        tomorrow.month(),
+        tomorrow.day(),
+        0,
+        0,
+        0,
+    ) {
+        LocalResult::Single(dt) => dt,
+        LocalResult::Ambiguous(dt, _) => dt,
+        LocalResult::None => now + chrono::Duration::days(1),
+    };
+
     (midnight - now)
         .to_std()
         .unwrap_or_else(|_| Duration::from_secs(0))
