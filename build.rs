@@ -1,4 +1,4 @@
-use std::{env, fs, path::PathBuf, process::Command};
+use std::{env, fs, path::{Path, PathBuf}, process::Command};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_build::configure().compile_protos(&["proto/watchdog.proto"], &["proto"])?;
@@ -129,6 +129,14 @@ fn build_ebpf() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let header_path = manifest_dir.join("src/ebpf/vmlinux.h");
+    if let Err(err) = refresh_vmlinux_header(&header_path) {
+        println!(
+            "cargo:warning=Unable to refresh vmlinux.h from host BTF data: {err}; using existing header"
+        );
+    }
+
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
     let obj_path = out_dir.join("network.o");
 
@@ -171,5 +179,33 @@ fn build_ebpf() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    Ok(())
+}
+
+fn refresh_vmlinux_header(header_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new("bpftool")
+        .args([
+            "btf",
+            "dump",
+            "file",
+            "/sys/kernel/btf/vmlinux",
+            "format",
+            "c",
+        ])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "bpftool exited with status {}",
+            output
+                .status
+                .code()
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "signal".to_string())
+        )
+        .into());
+    }
+
+    fs::write(header_path, output.stdout)?;
     Ok(())
 }
