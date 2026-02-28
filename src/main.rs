@@ -97,7 +97,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
                 system_status_store,
                 client_status_store,
                 process_store,
-                Duration::from_secs(5),
+                Duration::from_secs(2),
             )
             .await;
         });
