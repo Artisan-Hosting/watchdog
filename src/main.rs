@@ -63,12 +63,12 @@ async fn main() -> Result<(), ErrorArrayItem> {
     let system_information_store = defs::new_system_information_store();
     let system_process_store = defs::new_child_process_array();
 
-    match security_trip::consume_startup_trip_marker(&system_information_store).await {
+    match security_trip::refresh_startup_trip_status(&system_information_store).await {
         Ok(_) => {}
         Err(err) => {
             log!(
                 LogLevel::Warn,
-                "Failed to consume startup security trip marker: {}",
+                "Failed to refresh startup security trip status: {}",
                 err.err_mesg
             );
         }
@@ -76,6 +76,15 @@ async fn main() -> Result<(), ErrorArrayItem> {
 
     crate::pid_persistence::initialise().await?;
     crate::pid_persistence::reclaim_orphan_processes().await?;
+
+    if ebpf::manager().is_active() {
+        log!(LogLevel::Info, "eBPF network tracking is active");
+    } else {
+        log!(
+            LogLevel::Warn,
+            "eBPF network tracking is inactive; network usage will be unavailable"
+        );
+    }
 
     {
         let system_status_store = system_application_status_store.clone();

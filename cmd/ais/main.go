@@ -134,7 +134,7 @@ func listApplications(ctx context.Context, client pb.WatchdogClient) {
 	if len(systemApps) > 0 {
 		fmt.Println("System Applications:")
 		for _, app := range systemApps {
-			fmt.Printf("  %-20s %-10s CPU: %.1f%% Mem: %.1f MB\n",
+			fmt.Printf("  %-20s %-10s CPU: %.2f%% Mem: %.1f MB\n",
 				app.Name, app.Status, app.CpuUsage, app.MemoryUsage)
 		}
 	}
@@ -145,7 +145,7 @@ func listApplications(ctx context.Context, client pb.WatchdogClient) {
 		}
 		fmt.Println("Client Applications:")
 		for _, app := range clientApps {
-			fmt.Printf("  %-20s %-10s CPU: %.1f%% Mem: %.1f MB\n",
+			fmt.Printf("  %-20s %-10s CPU: %.2f%% Mem: %.1f MB\n",
 				app.Name, app.Status, app.CpuUsage, app.MemoryUsage)
 		}
 	}

@@ -1,5 +1,5 @@
 use artisan_middleware::{
-    aggregator::Status,
+    aggregator::{NetworkUsage, Status},
     dusa_collection_utils::{
         core::{
             errors::{ErrorArrayItem, Errors},
@@ -9,6 +9,7 @@ use artisan_middleware::{
         log,
     },
     process_manager::{SupervisedProcess, spawn_complex_process},
+    resource_monitor::{ResourceMonitor, ResourceMonitorLock},
     state_persistence::{AppState, StatePersistence},
 };
 use get_if_addrs::{IfAddr, get_if_addrs};
@@ -643,6 +644,7 @@ async fn observe_supervised_process(
             if let Ok(metrics) = child.get_metrics().await {
                 observations.metrics = Some(metrics);
             }
+            backfill_tree_usage_metrics(name, &child.monitor, &mut observations.metrics).await;
             if let Ok(stdout) = child.get_std_out().await {
                 observations.stdout = Some(stdout);
             }
@@ -683,36 +685,165 @@ async fn observe_supervised_process(
             if let Ok(metrics) = proc.get_metrics().await {
                 observations.metrics = Some(metrics);
             }
+            backfill_tree_usage_metrics(name, &proc.monitor, &mut observations.metrics).await;
             observations.pid = Some(proc.get_pid() as u32);
         }
     }
 
     if let Some(pid) = observations.pid {
-        match ebpf::usage_for_pid(pid) {
+        let network_pids = collect_network_tree_pids(pid);
+        register_network_tree_pids(name, &network_pids).await;
+
+        if let Some(usage) = aggregate_network_usage_for_pids(name, &network_pids) {
+            if let Some(metrics) = observations.metrics.as_mut() {
+                metrics.other = Some(usage);
+            } else {
+                observations.metrics = Some(artisan_middleware::aggregator::Metrics {
+                    cpu_usage: 0.0,
+                    memory_usage: 0.0,
+                    other: Some(usage),
+                });
+            }
+        }
+    }
+
+    Ok(observations)
+}
+
+async fn backfill_tree_usage_metrics(
+    name: &str,
+    monitor: &ResourceMonitorLock,
+    metrics: &mut Option<artisan_middleware::aggregator::Metrics>,
+) {
+    let should_attempt = metrics
+        .as_ref()
+        .map(|value| value.cpu_usage <= 0.0)
+        .unwrap_or(true);
+
+    if !should_attempt {
+        return;
+    }
+
+    let monitor_guard = match monitor.0.try_read().await {
+        Ok(guard) => guard,
+        Err(err) => {
+            log!(
+                LogLevel::Trace,
+                "Failed to lock monitor for tree usage fallback on {}: {}",
+                name,
+                err
+            );
+            return;
+        }
+    };
+
+    let (tree_cpu, tree_memory) = match monitor_guard.aggregate_tree_usage() {
+        Ok(values) => values,
+        Err(err) => {
+            log!(
+                LogLevel::Trace,
+                "Failed to compute tree usage fallback on {}: {}",
+                name,
+                err.err_mesg
+            );
+            return;
+        }
+    };
+
+    if tree_cpu <= 0.0 && tree_memory <= 0.0 {
+        return;
+    }
+
+    let entry = metrics
+        .get_or_insert_with(|| artisan_middleware::aggregator::Metrics {
+            cpu_usage: 0.0,
+            memory_usage: 0.0,
+            other: None,
+        });
+
+    if tree_cpu > entry.cpu_usage {
+        entry.cpu_usage = tree_cpu;
+    }
+
+    if tree_memory > entry.memory_usage {
+        entry.memory_usage = tree_memory;
+    }
+
+    log!(
+        LogLevel::Trace,
+        "Applied tree usage fallback for {}: cpu={:.2}% mem={:.2}MB",
+        name,
+        entry.cpu_usage,
+        entry.memory_usage
+    );
+}
+
+fn collect_network_tree_pids(root_pid: u32) -> Vec<u32> {
+    let root_pid_i32 = match i32::try_from(root_pid) {
+        Ok(value) => value,
+        Err(_) => return vec![root_pid],
+    };
+
+    let mut visited = HashSet::new();
+    match ResourceMonitor::collect_all_pids(root_pid_i32, &mut visited) {
+        Ok(pids) => {
+            let mut out: Vec<u32> = pids
+                .into_iter()
+                .filter_map(|pid| u32::try_from(pid).ok())
+                .collect();
+            if out.is_empty() {
+                out.push(root_pid);
+            }
+            out
+        }
+        Err(_) => vec![root_pid],
+    }
+}
+
+async fn register_network_tree_pids(name: &str, pids: &[u32]) {
+    for pid in pids {
+        if let Err(err) = ebpf::register_pid(*pid) {
+            log!(
+                LogLevel::Trace,
+                "Failed to register network-tracked PID {} for {}: {}",
+                pid,
+                name,
+                err.err_mesg
+            );
+        }
+    }
+}
+
+fn aggregate_network_usage_for_pids(name: &str, pids: &[u32]) -> Option<NetworkUsage> {
+    let mut rx_bytes: u64 = 0;
+    let mut tx_bytes: u64 = 0;
+    let mut any = false;
+
+    for pid in pids {
+        match ebpf::usage_for_pid(*pid) {
             Ok(Some(usage)) => {
-                if let Some(metrics) = observations.metrics.as_mut() {
-                    metrics.other = Some(usage);
-                } else {
-                    observations.metrics = Some(artisan_middleware::aggregator::Metrics {
-                        cpu_usage: 0.0,
-                        memory_usage: 0.0,
-                        other: Some(usage),
-                    });
-                }
+                rx_bytes = rx_bytes.saturating_add(usage.rx_bytes);
+                tx_bytes = tx_bytes.saturating_add(usage.tx_bytes);
+                any = true;
             }
             Ok(None) => {}
             Err(err) => {
                 log!(
                     LogLevel::Trace,
-                    "Failed to read eBPF usage for PID {}: {}",
+                    "Failed to read eBPF usage for PID {} ({}): {}",
                     pid,
+                    name,
                     err.err_mesg
                 );
             }
         }
     }
 
-    Ok(observations)
+    if any {
+        Some(NetworkUsage { rx_bytes, tx_bytes })
+    } else {
+        None
+    }
 }
 
 fn merge_state_and_observations(

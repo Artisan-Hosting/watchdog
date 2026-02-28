@@ -327,26 +327,53 @@ impl Watchdog for WatchdogService {
                 }
                 Payload::Rebuild(rebuild_command) => {
                     let application = rebuild_command.application;
-                    match functions::rebuild_application_stub(&application, &self.process_handles)
-                        .await
-                    {
-                        Ok(result) => (result.accepted, result.message),
-                        Err(err) => {
-                            log!(
-                                LogLevel::Error,
-                                "Failed to process rebuild command for {}: {}",
-                                application,
-                                err.err_mesg
-                            );
-                            (
-                                false,
-                                format!(
+                    let stores = self.process_handles.clone();
+                    let build_store = self.build_status_store.clone();
+                    let queued_application = application.clone();
+
+                    tokio::spawn(async move {
+                        match functions::rebuild_application_stub(&application, &stores).await {
+                            Ok(result) => {
+                                let status = if result.accepted {
+                                    definitions::BuildStatus::success(application.clone(), false)
+                                } else {
+                                    definitions::BuildStatus::failure(application.clone(), false)
+                                };
+                                {
+                                    let mut store = build_store.write().await;
+                                    store.insert(application.clone(), status);
+                                }
+                                if result.accepted {
+                                    log!(LogLevel::Info, "{}", result.message);
+                                } else {
+                                    log!(LogLevel::Warn, "{}", result.message);
+                                }
+                            }
+                            Err(err) => {
+                                {
+                                    let mut store = build_store.write().await;
+                                    store.insert(
+                                        application.clone(),
+                                        definitions::BuildStatus::failure(application.clone(), false),
+                                    );
+                                }
+                                log!(
+                                    LogLevel::Error,
                                     "Failed to process rebuild command for {}: {}",
-                                    application, err.err_mesg
-                                ),
-                            )
+                                    application,
+                                    err.err_mesg
+                                );
+                            }
                         }
-                    }
+                    });
+
+                    (
+                        true,
+                        format!(
+                            "[stub] rebuild command queued for {}; check list_builds for final status",
+                            queued_application
+                        ),
+                    )
                 }
                 Payload::Status(status_command) => {
                     let application = status_command.application;
