@@ -22,8 +22,8 @@ pub mod proto {
 use proto::{
     ApplicationStatusList, ApplicationStatusMessage, ApplicationStatusRequest,
     ApplicationStatusResponse, BuildStatusList, BuildStatusMessage, CommandRequest,
-    CommandResponse, Empty, NetworkUsageMessage, StdLogEntry, SystemInfo, VerificationEntryList,
-    VerificationEntryMessage,
+    CommandResponse, Empty, NetworkUsageMessage, SecurityTripStatus, StdLogEntry, SystemInfo,
+    VerificationEntryList, VerificationEntryMessage, VersionInfo,
     watchdog_server::{Watchdog, WatchdogServer},
 };
 
@@ -233,6 +233,21 @@ impl Watchdog for WatchdogService {
         Ok(Response::new(system_info_to_proto(info)))
     }
 
+    async fn get_security_trip_status(
+        &self,
+        _request: Request<Empty>,
+    ) -> Result<Response<SecurityTripStatus>, Status> {
+        let info = self.system_information_store.read().await.clone();
+        Ok(Response::new(security_trip_status_to_proto(info)))
+    }
+
+    async fn get_version_info(
+        &self,
+        _request: Request<Empty>,
+    ) -> Result<Response<VersionInfo>, Status> {
+        Ok(Response::new(version_info_to_proto()))
+    }
+
     async fn execute_command(
         &self,
         request: Request<CommandRequest>,
@@ -380,8 +395,12 @@ impl Watchdog for WatchdogService {
                             .join(", ")
                     };
                     let message = format!(
-                        "[info] identity={identity}, system_apps_initialized={}, manager_linked={}, ip_addrs=[{ips}]",
-                        info.system_apps_initialized, info.manager_linked
+                        "[info] identity={identity}, system_apps_initialized={}, manager_linked={}, security_tripped={}, security_trip_detected_at={}, security_trip_summary={}, ip_addrs=[{ips}]",
+                        info.system_apps_initialized,
+                        info.manager_linked,
+                        info.security_tripped,
+                        info.security_trip_detected_at,
+                        info.security_trip_summary
                     );
                     (true, message)
                 }
@@ -457,6 +476,28 @@ fn system_info_to_proto(info: definitions::ArtisanSystemInformation) -> SystemIn
         system_apps_initialized: info.system_apps_initialized,
         ip_addresses: info.ip_addrs.iter().map(|ip| ip.to_string()).collect(),
         manager_linked: info.manager_linked,
+        security_tripped: info.security_tripped,
+        security_trip_detected_at: info.security_trip_detected_at,
+        security_trip_summary: info.security_trip_summary,
+    }
+}
+
+fn security_trip_status_to_proto(
+    info: definitions::ArtisanSystemInformation,
+) -> SecurityTripStatus {
+    SecurityTripStatus {
+        tripped: info.security_tripped,
+        detected_at: info.security_trip_detected_at,
+        summary: info.security_trip_summary,
+    }
+}
+
+fn version_info_to_proto() -> VersionInfo {
+    VersionInfo {
+        watchdog_version: env!("CARGO_PKG_VERSION").to_string(),
+        artisan_middleware_version: option_env!("ARTISAN_MIDDLEWARE_VERSION")
+            .unwrap_or("unknown")
+            .to_string(),
     }
 }
 

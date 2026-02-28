@@ -33,6 +33,7 @@ pub mod grpc;
 pub mod kernel_watchdog;
 pub mod pid_persistence;
 pub mod scripts;
+pub mod security_trip;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), ErrorArrayItem> {
@@ -61,6 +62,17 @@ async fn main() -> Result<(), ErrorArrayItem> {
     let verification_status_store = defs::new_verification_status_store();
     let system_information_store = defs::new_system_information_store();
     let system_process_store = defs::new_child_process_array();
+
+    match security_trip::consume_startup_trip_marker(&system_information_store).await {
+        Ok(_) => {}
+        Err(err) => {
+            log!(
+                LogLevel::Warn,
+                "Failed to consume startup security trip marker: {}",
+                err.err_mesg
+            );
+        }
+    }
 
     crate::pid_persistence::initialise().await?;
     crate::pid_persistence::reclaim_orphan_processes().await?;

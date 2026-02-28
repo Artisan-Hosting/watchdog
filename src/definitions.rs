@@ -71,6 +71,10 @@ pub const APPLICATION_STD_BUFFER_SIZE: usize = 500;
 pub const WATCHDOG_SOCKET_PATH: &str = "/tmp/artisan_watchdog.sock";
 /// Location where we persist encrypted PID ledgers for crash recovery.
 pub const WATCHDOG_PID_LEDGER_PATH: &str = "/tmp/.artisan_watchdog_pids";
+/// Marker file written by kernel/userland trip reporting path.
+pub const WATCHDOG_TAMPER_FLAG_PATH: &str = "/var/log/.ais_tamper";
+/// Audit log where watchdog records consumed tamper markers.
+pub const WATCHDOG_SECURITY_AUDIT_LOG_PATH: &str = "/opt/artisan/log/security_trip_audit.log";
 
 /// Canonical list of files that must be present for watchdog to proceed.
 pub const CORE_VERIFICATION_PATHS: [&str; 2] = [LEDGER_PATH, GIT_CONFIG_PATH];
@@ -303,6 +307,9 @@ pub struct ArtisanSystemInformation {
     pub system_apps_initialized: bool, // Only true if all services are running
     pub ip_addrs: Vec<Ipv4Addr>,       // every ip v4 on the system exept docker and localhost ips
     pub manager_linked: bool, // The manager will ping us when it starts indicating we're all the way online
+    pub security_tripped: bool,
+    pub security_trip_detected_at: u64,
+    pub security_trip_summary: String,
 }
 
 impl ArtisanSystemInformation {
@@ -326,6 +333,9 @@ impl Default for ArtisanSystemInformation {
             system_apps_initialized: true,
             ip_addrs: ips,
             manager_linked: false,
+            security_tripped: false,
+            security_trip_detected_at: 0,
+            security_trip_summary: "clear".to_string(),
         }
     }
 }
