@@ -8,7 +8,7 @@ use artisan_middleware::{
         },
         log,
     },
-    process_manager::{SupervisedProcess, spawn_complex_process},
+    process_manager::{SupervisedChild, SupervisedProcess, spawn_complex_process},
     resource_monitor::{ResourceMonitor, ResourceMonitorLock},
     state_persistence::{AppState, StatePersistence},
 };
@@ -46,9 +46,9 @@ const WWW_DATA_GID: u32 = 33;
 const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const STATE_STALE_THRESHOLD_SECONDS: u64 = 30;
 const WATCHDOG_DECLARED_DEAD_MESSAGE: &str = "watchdog declared dead";
-const RESOURCE_MONITOR_MAX_STALENESS: Duration = Duration::from_secs(20);
+const RESOURCE_MONITOR_MAX_STALENESS: Duration = Duration::from_millis(1_500);
 const RESOURCE_MONITOR_MAX_CONSECUTIVE_FAILURES: u64 = 5;
-const STDX_MONITOR_MAX_STALENESS: Duration = Duration::from_secs(30);
+const STDX_MONITOR_MAX_STALENESS: Duration = Duration::from_millis(2_500);
 const STDX_MONITOR_MAX_CONSECUTIVE_FAILURES: u64 = 8;
 
 static LAST_SEEN_STATE_PIDS: Lazy<Mutex<HashMap<String, u32>>> =
@@ -56,6 +56,8 @@ static LAST_SEEN_STATE_PIDS: Lazy<Mutex<HashMap<String, u32>>> =
 static STATE_IO_QUEUE: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 static STDX_UNHEALTHY_LATCH: Lazy<Mutex<HashSet<String>>> =
     Lazy::new(|| Mutex::new(HashSet::new()));
+static NETWORK_USAGE_CACHE: Lazy<Mutex<HashMap<String, NetworkUsage>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 // pub async fn build_critical(name: &str) -> Result<(), ErrorArrayItem> {
 //     let ais_name = definitions::ais_name(name);
@@ -102,6 +104,38 @@ pub async fn monitor_application_states(
             );
         }
 
+    }
+}
+
+/// Runtime loop for fast monitor-health checks and network usage aggregation.
+///
+/// - Resource monitor watchdog checks run at `interval`.
+/// - Stdout/stderr watchdog checks run at `stdx_interval`.
+/// - eBPF PID registration/aggregation runs at `interval`.
+pub async fn monitor_runtime_health(
+    process_store: definitions::ChildProcessArray,
+    interval: Duration,
+    stdx_interval: Duration,
+) {
+    let mut ticker = time::interval(interval);
+    let base_ms = interval.as_millis().max(1);
+    let stdx_every = ((stdx_interval.as_millis().max(base_ms)) / base_ms) as u64;
+    let mut tick_count: u64 = 0;
+
+    loop {
+        ticker.tick().await;
+        tick_count = tick_count.wrapping_add(1);
+        let divisor = stdx_every.max(1);
+        let check_stdx = tick_count % divisor == 0;
+
+        if let Err(err) = refresh_runtime_health_and_network(&process_store, check_stdx).await {
+            log!(
+                LogLevel::Warn,
+                "Failed runtime monitor pass: {}",
+                err.err_mesg
+            );
+        }
+
         if let Err(err) = ebpf::cleanup_dead_pids() {
             log!(
                 LogLevel::Trace,
@@ -110,6 +144,39 @@ pub async fn monitor_application_states(
             );
         }
     }
+}
+
+async fn refresh_runtime_health_and_network(
+    process_store: &definitions::ChildProcessArray,
+    check_stdx: bool,
+) -> Result<(), ErrorArrayItem> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut processes = process_store.try_write().await?;
+
+    for (name, process) in processes.iter_mut() {
+        seen.insert(name.clone());
+        match process {
+            definitions::SupervisedProcesses::Child(child) => {
+                ensure_resource_monitor_healthy_for_child(name, child).await;
+                if check_stdx {
+                    ensure_stdx_monitor_healthy_for_child(name, child).await;
+                }
+                match child.get_pid().await {
+                    Ok(pid) => update_network_usage_cache_for_pid(name, pid).await,
+                    Err(_) => remove_network_usage_cache_entry(name).await,
+                }
+            }
+            definitions::SupervisedProcesses::Process(proc) => {
+                mark_stdx_healthy(name).await;
+                ensure_resource_monitor_healthy_for_process(name, proc).await;
+                update_network_usage_cache_for_pid(name, proc.get_pid() as u32).await;
+            }
+        }
+    }
+
+    drop(processes);
+    prune_network_usage_cache(&seen).await;
+    Ok(())
 }
 
 fn is_system_application_name(name: &str) -> bool {
@@ -147,6 +214,119 @@ async fn should_log_stdx_unhealthy(name: &str) -> bool {
 async fn mark_stdx_healthy(name: &str) {
     let mut guard = STDX_UNHEALTHY_LATCH.lock().await;
     guard.remove(name);
+}
+
+async fn ensure_resource_monitor_healthy_for_child(name: &str, child: &mut SupervisedChild) {
+    if !child.resource_monitor_valid(
+        RESOURCE_MONITOR_MAX_STALENESS,
+        RESOURCE_MONITOR_MAX_CONSECUTIVE_FAILURES,
+    ) {
+        let snapshot = child.resource_watchdog_snapshot();
+        log!(
+            LogLevel::Warn,
+            "Resource monitor watchdog unhealthy for {} (running={}, starts={}, last_heartbeat_ms={}, consecutive_failures={}); restarting monitor",
+            name,
+            snapshot.running,
+            snapshot.start_count,
+            snapshot.last_heartbeat_unix_ms,
+            snapshot.consecutive_failures
+        );
+        child.terminate_monitor();
+        child.monitor_usage().await;
+    } else if !child.monitoring() {
+        log!(
+            LogLevel::Warn,
+            "Resource monitor task not running for {}; restarting monitor",
+            name
+        );
+        child.monitor_usage().await;
+    }
+}
+
+async fn ensure_stdx_monitor_healthy_for_child(name: &str, child: &mut SupervisedChild) {
+    if !child.stdx_monitor_valid(
+        STDX_MONITOR_MAX_STALENESS,
+        STDX_MONITOR_MAX_CONSECUTIVE_FAILURES,
+    ) {
+        let snapshot = child.stdx_watchdog_snapshot();
+        if should_log_stdx_unhealthy(name).await {
+            log!(
+                LogLevel::Warn,
+                "Stdx monitor watchdog unhealthy for {} (running={}, starts={}, last_heartbeat_ms={}, consecutive_failures={}); restarting monitor",
+                name,
+                snapshot.running,
+                snapshot.start_count,
+                snapshot.last_heartbeat_unix_ms,
+                snapshot.consecutive_failures
+            );
+        }
+        child.terminate_stdx();
+        child.monitor_stdx().await;
+    } else {
+        mark_stdx_healthy(name).await;
+        if !child.monitoring_stdx() {
+            log!(
+                LogLevel::Warn,
+                "Stdx monitor task not running for {}; restarting monitor",
+                name
+            );
+            child.monitor_stdx().await;
+        }
+    }
+}
+
+async fn ensure_resource_monitor_healthy_for_process(name: &str, proc: &mut SupervisedProcess) {
+    if !proc.resource_monitor_valid(
+        RESOURCE_MONITOR_MAX_STALENESS,
+        RESOURCE_MONITOR_MAX_CONSECUTIVE_FAILURES,
+    ) {
+        let snapshot = proc.resource_watchdog_snapshot();
+        log!(
+            LogLevel::Warn,
+            "Resource monitor watchdog unhealthy for {} (running={}, starts={}, last_heartbeat_ms={}, consecutive_failures={}); restarting monitor",
+            name,
+            snapshot.running,
+            snapshot.start_count,
+            snapshot.last_heartbeat_unix_ms,
+            snapshot.consecutive_failures
+        );
+        proc.terminate_monitor();
+        proc.monitor_usage().await;
+    } else if !proc.monitoring() {
+        log!(
+            LogLevel::Warn,
+            "Resource monitor task not running for {}; restarting monitor",
+            name
+        );
+        proc.monitor_usage().await;
+    }
+}
+
+async fn remove_network_usage_cache_entry(name: &str) {
+    let mut cache = NETWORK_USAGE_CACHE.lock().await;
+    cache.remove(name);
+}
+
+async fn prune_network_usage_cache(valid_names: &HashSet<String>) {
+    let mut cache = NETWORK_USAGE_CACHE.lock().await;
+    cache.retain(|name, _| valid_names.contains(name));
+}
+
+async fn cached_network_usage_for_application(name: &str) -> Option<NetworkUsage> {
+    let cache = NETWORK_USAGE_CACHE.lock().await;
+    cache.get(name).cloned()
+}
+
+async fn update_network_usage_cache_for_pid(name: &str, pid: u32) {
+    let network_pids = collect_network_tree_pids(pid);
+    register_network_tree_pids(name, &network_pids).await;
+
+    let mut cache = NETWORK_USAGE_CACHE.lock().await;
+    if let Some(usage) = aggregate_network_usage_for_pids(name, &network_pids) {
+        cache.insert(name.to_string(), usage);
+    } else {
+        cache.remove(name);
+    }
 }
 
 fn should_track_state(state: &AppState) -> bool {
@@ -586,61 +766,6 @@ async fn observe_supervised_process(
 
     match process {
         definitions::SupervisedProcesses::Child(child) => {
-            if !child.resource_monitor_valid(
-                RESOURCE_MONITOR_MAX_STALENESS,
-                RESOURCE_MONITOR_MAX_CONSECUTIVE_FAILURES,
-            ) {
-                let snapshot = child.resource_watchdog_snapshot();
-                log!(
-                    LogLevel::Warn,
-                    "Resource monitor watchdog unhealthy for {} (running={}, starts={}, last_heartbeat_ms={}, consecutive_failures={}); restarting monitor",
-                    name,
-                    snapshot.running,
-                    snapshot.start_count,
-                    snapshot.last_heartbeat_unix_ms,
-                    snapshot.consecutive_failures
-                );
-                child.terminate_monitor();
-                child.monitor_usage().await;
-            } else if !child.monitoring() {
-                log!(
-                    LogLevel::Warn,
-                    "Resource monitor task not running for {}; restarting monitor",
-                    name
-                );
-                child.monitor_usage().await;
-            }
-
-            if !child.stdx_monitor_valid(
-                STDX_MONITOR_MAX_STALENESS,
-                STDX_MONITOR_MAX_CONSECUTIVE_FAILURES,
-            ) {
-                let snapshot = child.stdx_watchdog_snapshot();
-                if should_log_stdx_unhealthy(name).await {
-                    log!(
-                        LogLevel::Warn,
-                        "Stdx monitor watchdog unhealthy for {} (running={}, starts={}, last_heartbeat_ms={}, consecutive_failures={}); restarting monitor",
-                        name,
-                        snapshot.running,
-                        snapshot.start_count,
-                        snapshot.last_heartbeat_unix_ms,
-                        snapshot.consecutive_failures
-                    );
-                }
-                child.terminate_stdx();
-                child.monitor_stdx().await;
-            } else {
-                mark_stdx_healthy(name).await;
-                if !child.monitoring_stdx() {
-                    log!(
-                        LogLevel::Warn,
-                        "Stdx monitor task not running for {}; restarting monitor",
-                        name
-                    );
-                    child.monitor_stdx().await;
-                }
-            }
-
             if let Ok(metrics) = child.get_metrics().await {
                 observations.metrics = Some(metrics);
             }
@@ -656,32 +781,6 @@ async fn observe_supervised_process(
             }
         }
         definitions::SupervisedProcesses::Process(proc) => {
-            mark_stdx_healthy(name).await;
-            if !proc.resource_monitor_valid(
-                RESOURCE_MONITOR_MAX_STALENESS,
-                RESOURCE_MONITOR_MAX_CONSECUTIVE_FAILURES,
-            ) {
-                let snapshot = proc.resource_watchdog_snapshot();
-                log!(
-                    LogLevel::Warn,
-                    "Resource monitor watchdog unhealthy for {} (running={}, starts={}, last_heartbeat_ms={}, consecutive_failures={}); restarting monitor",
-                    name,
-                    snapshot.running,
-                    snapshot.start_count,
-                    snapshot.last_heartbeat_unix_ms,
-                    snapshot.consecutive_failures
-                );
-                proc.terminate_monitor();
-                proc.monitor_usage().await;
-            } else if !proc.monitoring() {
-                log!(
-                    LogLevel::Warn,
-                    "Resource monitor task not running for {}; restarting monitor",
-                    name
-                );
-                proc.monitor_usage().await;
-            }
-
             if let Ok(metrics) = proc.get_metrics().await {
                 observations.metrics = Some(metrics);
             }
@@ -690,20 +789,15 @@ async fn observe_supervised_process(
         }
     }
 
-    if let Some(pid) = observations.pid {
-        let network_pids = collect_network_tree_pids(pid);
-        register_network_tree_pids(name, &network_pids).await;
-
-        if let Some(usage) = aggregate_network_usage_for_pids(name, &network_pids) {
-            if let Some(metrics) = observations.metrics.as_mut() {
-                metrics.other = Some(usage);
-            } else {
-                observations.metrics = Some(artisan_middleware::aggregator::Metrics {
-                    cpu_usage: 0.0,
-                    memory_usage: 0.0,
-                    other: Some(usage),
-                });
-            }
+    if let Some(usage) = cached_network_usage_for_application(name).await {
+        if let Some(metrics) = observations.metrics.as_mut() {
+            metrics.other = Some(usage);
+        } else {
+            observations.metrics = Some(artisan_middleware::aggregator::Metrics {
+                cpu_usage: 0.0,
+                memory_usage: 0.0,
+                other: Some(usage),
+            });
         }
     }
 
@@ -802,7 +896,7 @@ fn collect_network_tree_pids(root_pid: u32) -> Vec<u32> {
 
 async fn register_network_tree_pids(name: &str, pids: &[u32]) {
     for pid in pids {
-        if let Err(err) = ebpf::register_pid(*pid) {
+        if let Err(err) = ebpf::register_pid_with_retry(*pid).await {
             log!(
                 LogLevel::Trace,
                 "Failed to register network-tracked PID {} for {}: {}",

@@ -19,7 +19,10 @@ use tokio::task::JoinSet;
 
 use crate::{
     definitions::{self as defs, ARTISAN_BIN_DIR, CRITICAL_APPLICATIONS, VerificationEntry},
-    functions::{generate_safe_client_runner_list, monitor_application_states, verify_path},
+    functions::{
+        generate_safe_client_runner_list, monitor_application_states, monitor_runtime_health,
+        verify_path,
+    },
     scripts::{
         build_application, build_runner_binary, clean_cargo_projects, clean_runner_workspace,
         revert_to_vetted,
@@ -98,6 +101,20 @@ async fn main() -> Result<(), ErrorArrayItem> {
                 client_status_store,
                 process_store,
                 Duration::from_secs(2),
+            )
+            .await;
+        });
+    }
+
+    {
+        let process_store = system_process_store.clone();
+        log!(LogLevel::Debug, "Launching runtime monitor health task");
+        tokio::spawn(async move {
+            log!(LogLevel::Trace, "Runtime monitor health loop started");
+            monitor_runtime_health(
+                process_store,
+                Duration::from_millis(250),
+                Duration::from_millis(500),
             )
             .await;
         });
