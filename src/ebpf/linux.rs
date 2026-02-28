@@ -43,10 +43,10 @@ impl BandwidthTracker {
             .map_err(|err| ErrorArrayItem::new(Errors::GeneralError, err.to_string()))?;
 
         let probes = [
-            ("bpf_tcp_sendmsg_ret", "tcp_sendmsg"),
-            ("bpf_tcp_recvmsg_ret", "tcp_recvmsg"),
-            ("bpf_udp_sendmsg_ret", "udp_sendmsg"),
-            ("bpf_udp_recvmsg_ret", "udp_recvmsg"),
+            ("bpf_tcp_sendmsg", "tcp_sendmsg"),
+            ("bpf_tcp_recvmsg", "tcp_cleanup_rbuf"),
+            ("bpf_udp_sendmsg", "udp_sendmsg"),
+            ("bpf_udp_recvmsg", "udp_recvmsg"),
         ];
 
         for (prog_name, attach_point) in probes {

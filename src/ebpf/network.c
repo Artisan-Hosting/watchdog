@@ -2,6 +2,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
+#include "macros.h"
 
 struct traffic_stats {
     __u64 rx_bytes;
@@ -38,38 +39,38 @@ static __always_inline void update_stats(__u32 pid, ssize_t bytes, bool is_tx) {
     }
 }
 
-// TCP send: count actual bytes sent via function return value.
-SEC("kretprobe/tcp_sendmsg")
-int bpf_tcp_sendmsg_ret(struct pt_regs *ctx) {
+// TCP send
+SEC("kprobe/tcp_sendmsg")
+int bpf_tcp_sendmsg(struct pt_regs *ctx) {
     __u32 pid = bpf_get_current_pid_tgid() >> 32;
-    ssize_t written = PT_REGS_RC(ctx);
-    update_stats(pid, written, true);
+    ssize_t size = PT_REGS_PARM3(ctx);
+    update_stats(pid, size, true);
     return 0;
 }
 
-// TCP receive: count actual bytes copied to user space.
-SEC("kretprobe/tcp_recvmsg")
-int bpf_tcp_recvmsg_ret(struct pt_regs *ctx) {
+// TCP receive
+SEC("kprobe/tcp_cleanup_rbuf")
+int bpf_tcp_recvmsg(struct pt_regs *ctx) {
     __u32 pid = bpf_get_current_pid_tgid() >> 32;
-    ssize_t copied = PT_REGS_RC(ctx);
+    int copied = PT_REGS_PARM2(ctx);
     update_stats(pid, copied, false);
     return 0;
 }
 
-// UDP send: count actual bytes sent via function return value.
-SEC("kretprobe/udp_sendmsg")
-int bpf_udp_sendmsg_ret(struct pt_regs *ctx) {
+// UDP send
+SEC("kprobe/udp_sendmsg")
+int bpf_udp_sendmsg(struct pt_regs *ctx) {
     __u32 pid = bpf_get_current_pid_tgid() >> 32;
-    ssize_t written = PT_REGS_RC(ctx);
-    update_stats(pid, written, true);
+    ssize_t size = PT_REGS_PARM3(ctx);
+    update_stats(pid, size, true);
     return 0;
 }
 
-// UDP receive: count actual bytes copied to user space.
-SEC("kretprobe/udp_recvmsg")
-int bpf_udp_recvmsg_ret(struct pt_regs *ctx) {
+// UDP receive
+SEC("kprobe/udp_recvmsg")
+int bpf_udp_recvmsg(struct pt_regs *ctx) {
     __u32 pid = bpf_get_current_pid_tgid() >> 32;
-    ssize_t copied = PT_REGS_RC(ctx);
+    int copied = PT_REGS_PARM4(ctx);
     update_stats(pid, copied, false);
     return 0;
 }
