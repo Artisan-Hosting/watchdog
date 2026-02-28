@@ -155,8 +155,8 @@ fn duration_until_next_midnight() -> Duration {
     let now = Local::now();
     let tomorrow = now.date_naive() + chrono::Duration::days(1);
     let midnight = Local
-        .with_ymd_and_hms(tomorrow.year(), tomorrow.month(), tomorrow.day(), 0, 0, 0)
-        .expect("valid midnight timestamp");
+        .with_ymd_and_hms(tomorrow.year(), tomorrow.month(), tomorrow.day(), 0, 0, 0);
+        // .expect("valid midnight timestamp");
     (midnight - now)
         .to_std()
         .unwrap_or_else(|_| Duration::from_secs(0))
