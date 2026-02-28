@@ -74,6 +74,20 @@ message SystemInfo {
   bool system_apps_initialized = 2;
   repeated string ip_addresses = 3;
   bool manager_linked = 4;
+  bool security_tripped = 5;
+  uint64 security_trip_detected_at = 6;
+  string security_trip_summary = 7;
+}
+
+message SecurityTripStatus {
+  bool tripped = 1;
+  uint64 detected_at = 2;
+  string summary = 3;
+}
+
+message VersionInfo {
+  string watchdog_version = 1;
+  string artisan_middleware_version = 2;
 }
 
 enum GetConfigField {
@@ -161,5 +175,7 @@ service Watchdog {
   rpc ListBuilds(Empty) returns (BuildStatusList);
   rpc ListVerifications(Empty) returns (VerificationEntryList);
   rpc GetSystemInfo(Empty) returns (SystemInfo);
+  rpc GetSecurityTripStatus(Empty) returns (SecurityTripStatus);
+  rpc GetVersionInfo(Empty) returns (VersionInfo);
   rpc ExecuteCommand(CommandRequest) returns (CommandResponse);
 }

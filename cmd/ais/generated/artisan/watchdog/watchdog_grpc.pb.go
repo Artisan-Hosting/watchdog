@@ -19,12 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Watchdog_ListApplications_FullMethodName  = "/artisan.watchdog.Watchdog/ListApplications"
-	Watchdog_GetApplication_FullMethodName    = "/artisan.watchdog.Watchdog/GetApplication"
-	Watchdog_ListBuilds_FullMethodName        = "/artisan.watchdog.Watchdog/ListBuilds"
-	Watchdog_ListVerifications_FullMethodName = "/artisan.watchdog.Watchdog/ListVerifications"
-	Watchdog_GetSystemInfo_FullMethodName     = "/artisan.watchdog.Watchdog/GetSystemInfo"
-	Watchdog_ExecuteCommand_FullMethodName    = "/artisan.watchdog.Watchdog/ExecuteCommand"
+	Watchdog_ListApplications_FullMethodName      = "/artisan.watchdog.Watchdog/ListApplications"
+	Watchdog_GetApplication_FullMethodName        = "/artisan.watchdog.Watchdog/GetApplication"
+	Watchdog_ListBuilds_FullMethodName            = "/artisan.watchdog.Watchdog/ListBuilds"
+	Watchdog_ListVerifications_FullMethodName     = "/artisan.watchdog.Watchdog/ListVerifications"
+	Watchdog_GetSystemInfo_FullMethodName         = "/artisan.watchdog.Watchdog/GetSystemInfo"
+	Watchdog_GetSecurityTripStatus_FullMethodName = "/artisan.watchdog.Watchdog/GetSecurityTripStatus"
+	Watchdog_GetVersionInfo_FullMethodName        = "/artisan.watchdog.Watchdog/GetVersionInfo"
+	Watchdog_ExecuteCommand_FullMethodName        = "/artisan.watchdog.Watchdog/ExecuteCommand"
 )
 
 // WatchdogClient is the client API for Watchdog service.
@@ -36,6 +38,8 @@ type WatchdogClient interface {
 	ListBuilds(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*BuildStatusList, error)
 	ListVerifications(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*VerificationEntryList, error)
 	GetSystemInfo(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*SystemInfo, error)
+	GetSecurityTripStatus(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*SecurityTripStatus, error)
+	GetVersionInfo(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*VersionInfo, error)
 	ExecuteCommand(ctx context.Context, in *CommandRequest, opts ...grpc.CallOption) (*CommandResponse, error)
 }
 
@@ -97,6 +101,26 @@ func (c *watchdogClient) GetSystemInfo(ctx context.Context, in *Empty, opts ...g
 	return out, nil
 }
 
+func (c *watchdogClient) GetSecurityTripStatus(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*SecurityTripStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecurityTripStatus)
+	err := c.cc.Invoke(ctx, Watchdog_GetSecurityTripStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *watchdogClient) GetVersionInfo(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*VersionInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VersionInfo)
+	err := c.cc.Invoke(ctx, Watchdog_GetVersionInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *watchdogClient) ExecuteCommand(ctx context.Context, in *CommandRequest, opts ...grpc.CallOption) (*CommandResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CommandResponse)
@@ -116,6 +140,8 @@ type WatchdogServer interface {
 	ListBuilds(context.Context, *Empty) (*BuildStatusList, error)
 	ListVerifications(context.Context, *Empty) (*VerificationEntryList, error)
 	GetSystemInfo(context.Context, *Empty) (*SystemInfo, error)
+	GetSecurityTripStatus(context.Context, *Empty) (*SecurityTripStatus, error)
+	GetVersionInfo(context.Context, *Empty) (*VersionInfo, error)
 	ExecuteCommand(context.Context, *CommandRequest) (*CommandResponse, error)
 	mustEmbedUnimplementedWatchdogServer()
 }
@@ -141,6 +167,12 @@ func (UnimplementedWatchdogServer) ListVerifications(context.Context, *Empty) (*
 }
 func (UnimplementedWatchdogServer) GetSystemInfo(context.Context, *Empty) (*SystemInfo, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetSystemInfo not implemented")
+}
+func (UnimplementedWatchdogServer) GetSecurityTripStatus(context.Context, *Empty) (*SecurityTripStatus, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSecurityTripStatus not implemented")
+}
+func (UnimplementedWatchdogServer) GetVersionInfo(context.Context, *Empty) (*VersionInfo, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetVersionInfo not implemented")
 }
 func (UnimplementedWatchdogServer) ExecuteCommand(context.Context, *CommandRequest) (*CommandResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ExecuteCommand not implemented")
@@ -256,6 +288,42 @@ func _Watchdog_GetSystemInfo_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Watchdog_GetSecurityTripStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).GetSecurityTripStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_GetSecurityTripStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).GetSecurityTripStatus(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Watchdog_GetVersionInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).GetVersionInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_GetVersionInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).GetVersionInfo(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Watchdog_ExecuteCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CommandRequest)
 	if err := dec(in); err != nil {
@@ -300,6 +368,14 @@ var Watchdog_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetSystemInfo",
 			Handler:    _Watchdog_GetSystemInfo_Handler,
+		},
+		{
+			MethodName: "GetSecurityTripStatus",
+			Handler:    _Watchdog_GetSecurityTripStatus_Handler,
+		},
+		{
+			MethodName: "GetVersionInfo",
+			Handler:    _Watchdog_GetVersionInfo_Handler,
 		},
 		{
 			MethodName: "ExecuteCommand",

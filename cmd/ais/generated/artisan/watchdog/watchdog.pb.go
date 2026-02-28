@@ -772,13 +772,16 @@ func (x *VerificationEntryList) GetEntries() []*VerificationEntryMessage {
 }
 
 type SystemInfo struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	Identity              string                 `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
-	SystemAppsInitialized bool                   `protobuf:"varint,2,opt,name=system_apps_initialized,json=systemAppsInitialized,proto3" json:"system_apps_initialized,omitempty"`
-	IpAddresses           []string               `protobuf:"bytes,3,rep,name=ip_addresses,json=ipAddresses,proto3" json:"ip_addresses,omitempty"`
-	ManagerLinked         bool                   `protobuf:"varint,4,opt,name=manager_linked,json=managerLinked,proto3" json:"manager_linked,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	Identity               string                 `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
+	SystemAppsInitialized  bool                   `protobuf:"varint,2,opt,name=system_apps_initialized,json=systemAppsInitialized,proto3" json:"system_apps_initialized,omitempty"`
+	IpAddresses            []string               `protobuf:"bytes,3,rep,name=ip_addresses,json=ipAddresses,proto3" json:"ip_addresses,omitempty"`
+	ManagerLinked          bool                   `protobuf:"varint,4,opt,name=manager_linked,json=managerLinked,proto3" json:"manager_linked,omitempty"`
+	SecurityTripped        bool                   `protobuf:"varint,5,opt,name=security_tripped,json=securityTripped,proto3" json:"security_tripped,omitempty"`
+	SecurityTripDetectedAt uint64                 `protobuf:"varint,6,opt,name=security_trip_detected_at,json=securityTripDetectedAt,proto3" json:"security_trip_detected_at,omitempty"`
+	SecurityTripSummary    string                 `protobuf:"bytes,7,opt,name=security_trip_summary,json=securityTripSummary,proto3" json:"security_trip_summary,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *SystemInfo) Reset() {
@@ -839,6 +842,139 @@ func (x *SystemInfo) GetManagerLinked() bool {
 	return false
 }
 
+func (x *SystemInfo) GetSecurityTripped() bool {
+	if x != nil {
+		return x.SecurityTripped
+	}
+	return false
+}
+
+func (x *SystemInfo) GetSecurityTripDetectedAt() uint64 {
+	if x != nil {
+		return x.SecurityTripDetectedAt
+	}
+	return 0
+}
+
+func (x *SystemInfo) GetSecurityTripSummary() string {
+	if x != nil {
+		return x.SecurityTripSummary
+	}
+	return ""
+}
+
+type SecurityTripStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tripped       bool                   `protobuf:"varint,1,opt,name=tripped,proto3" json:"tripped,omitempty"`
+	DetectedAt    uint64                 `protobuf:"varint,2,opt,name=detected_at,json=detectedAt,proto3" json:"detected_at,omitempty"`
+	Summary       string                 `protobuf:"bytes,3,opt,name=summary,proto3" json:"summary,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SecurityTripStatus) Reset() {
+	*x = SecurityTripStatus{}
+	mi := &file_watchdog_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SecurityTripStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SecurityTripStatus) ProtoMessage() {}
+
+func (x *SecurityTripStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_watchdog_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SecurityTripStatus.ProtoReflect.Descriptor instead.
+func (*SecurityTripStatus) Descriptor() ([]byte, []int) {
+	return file_watchdog_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *SecurityTripStatus) GetTripped() bool {
+	if x != nil {
+		return x.Tripped
+	}
+	return false
+}
+
+func (x *SecurityTripStatus) GetDetectedAt() uint64 {
+	if x != nil {
+		return x.DetectedAt
+	}
+	return 0
+}
+
+func (x *SecurityTripStatus) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
+type VersionInfo struct {
+	state                    protoimpl.MessageState `protogen:"open.v1"`
+	WatchdogVersion          string                 `protobuf:"bytes,1,opt,name=watchdog_version,json=watchdogVersion,proto3" json:"watchdog_version,omitempty"`
+	ArtisanMiddlewareVersion string                 `protobuf:"bytes,2,opt,name=artisan_middleware_version,json=artisanMiddlewareVersion,proto3" json:"artisan_middleware_version,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
+}
+
+func (x *VersionInfo) Reset() {
+	*x = VersionInfo{}
+	mi := &file_watchdog_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VersionInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VersionInfo) ProtoMessage() {}
+
+func (x *VersionInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_watchdog_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VersionInfo.ProtoReflect.Descriptor instead.
+func (*VersionInfo) Descriptor() ([]byte, []int) {
+	return file_watchdog_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *VersionInfo) GetWatchdogVersion() string {
+	if x != nil {
+		return x.WatchdogVersion
+	}
+	return ""
+}
+
+func (x *VersionInfo) GetArtisanMiddlewareVersion() string {
+	if x != nil {
+		return x.ArtisanMiddlewareVersion
+	}
+	return ""
+}
+
 type SetConfigValue struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Value:
@@ -860,7 +996,7 @@ type SetConfigValue struct {
 
 func (x *SetConfigValue) Reset() {
 	*x = SetConfigValue{}
-	mi := &file_watchdog_proto_msgTypes[12]
+	mi := &file_watchdog_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -872,7 +1008,7 @@ func (x *SetConfigValue) String() string {
 func (*SetConfigValue) ProtoMessage() {}
 
 func (x *SetConfigValue) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[12]
+	mi := &file_watchdog_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -885,7 +1021,7 @@ func (x *SetConfigValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetConfigValue.ProtoReflect.Descriptor instead.
 func (*SetConfigValue) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{12}
+	return file_watchdog_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *SetConfigValue) GetValue() isSetConfigValue_Value {
@@ -1058,7 +1194,7 @@ type StartCommand struct {
 
 func (x *StartCommand) Reset() {
 	*x = StartCommand{}
-	mi := &file_watchdog_proto_msgTypes[13]
+	mi := &file_watchdog_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1070,7 +1206,7 @@ func (x *StartCommand) String() string {
 func (*StartCommand) ProtoMessage() {}
 
 func (x *StartCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[13]
+	mi := &file_watchdog_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1083,7 +1219,7 @@ func (x *StartCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartCommand.ProtoReflect.Descriptor instead.
 func (*StartCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{13}
+	return file_watchdog_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *StartCommand) GetApplication() string {
@@ -1102,7 +1238,7 @@ type StopCommand struct {
 
 func (x *StopCommand) Reset() {
 	*x = StopCommand{}
-	mi := &file_watchdog_proto_msgTypes[14]
+	mi := &file_watchdog_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1114,7 +1250,7 @@ func (x *StopCommand) String() string {
 func (*StopCommand) ProtoMessage() {}
 
 func (x *StopCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[14]
+	mi := &file_watchdog_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1127,7 +1263,7 @@ func (x *StopCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopCommand.ProtoReflect.Descriptor instead.
 func (*StopCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{14}
+	return file_watchdog_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *StopCommand) GetApplication() string {
@@ -1146,7 +1282,7 @@ type ReloadCommand struct {
 
 func (x *ReloadCommand) Reset() {
 	*x = ReloadCommand{}
-	mi := &file_watchdog_proto_msgTypes[15]
+	mi := &file_watchdog_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1158,7 +1294,7 @@ func (x *ReloadCommand) String() string {
 func (*ReloadCommand) ProtoMessage() {}
 
 func (x *ReloadCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[15]
+	mi := &file_watchdog_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1171,7 +1307,7 @@ func (x *ReloadCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadCommand.ProtoReflect.Descriptor instead.
 func (*ReloadCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{15}
+	return file_watchdog_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ReloadCommand) GetApplication() string {
@@ -1190,7 +1326,7 @@ type RebuildCommand struct {
 
 func (x *RebuildCommand) Reset() {
 	*x = RebuildCommand{}
-	mi := &file_watchdog_proto_msgTypes[16]
+	mi := &file_watchdog_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1202,7 +1338,7 @@ func (x *RebuildCommand) String() string {
 func (*RebuildCommand) ProtoMessage() {}
 
 func (x *RebuildCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[16]
+	mi := &file_watchdog_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1215,7 +1351,7 @@ func (x *RebuildCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RebuildCommand.ProtoReflect.Descriptor instead.
 func (*RebuildCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{16}
+	return file_watchdog_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *RebuildCommand) GetApplication() string {
@@ -1234,7 +1370,7 @@ type StatusCommand struct {
 
 func (x *StatusCommand) Reset() {
 	*x = StatusCommand{}
-	mi := &file_watchdog_proto_msgTypes[17]
+	mi := &file_watchdog_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1246,7 +1382,7 @@ func (x *StatusCommand) String() string {
 func (*StatusCommand) ProtoMessage() {}
 
 func (x *StatusCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[17]
+	mi := &file_watchdog_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1259,7 +1395,7 @@ func (x *StatusCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusCommand.ProtoReflect.Descriptor instead.
 func (*StatusCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{17}
+	return file_watchdog_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *StatusCommand) GetApplication() string {
@@ -1277,7 +1413,7 @@ type InfoCommand struct {
 
 func (x *InfoCommand) Reset() {
 	*x = InfoCommand{}
-	mi := &file_watchdog_proto_msgTypes[18]
+	mi := &file_watchdog_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1289,7 +1425,7 @@ func (x *InfoCommand) String() string {
 func (*InfoCommand) ProtoMessage() {}
 
 func (x *InfoCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[18]
+	mi := &file_watchdog_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1302,7 +1438,7 @@ func (x *InfoCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InfoCommand.ProtoReflect.Descriptor instead.
 func (*InfoCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{18}
+	return file_watchdog_proto_rawDescGZIP(), []int{20}
 }
 
 type SetCommand struct {
@@ -1315,7 +1451,7 @@ type SetCommand struct {
 
 func (x *SetCommand) Reset() {
 	*x = SetCommand{}
-	mi := &file_watchdog_proto_msgTypes[19]
+	mi := &file_watchdog_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1327,7 +1463,7 @@ func (x *SetCommand) String() string {
 func (*SetCommand) ProtoMessage() {}
 
 func (x *SetCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[19]
+	mi := &file_watchdog_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1340,7 +1476,7 @@ func (x *SetCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetCommand.ProtoReflect.Descriptor instead.
 func (*SetCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{19}
+	return file_watchdog_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SetCommand) GetApplication() string {
@@ -1367,7 +1503,7 @@ type GetCommand struct {
 
 func (x *GetCommand) Reset() {
 	*x = GetCommand{}
-	mi := &file_watchdog_proto_msgTypes[20]
+	mi := &file_watchdog_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1379,7 +1515,7 @@ func (x *GetCommand) String() string {
 func (*GetCommand) ProtoMessage() {}
 
 func (x *GetCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[20]
+	mi := &file_watchdog_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1392,7 +1528,7 @@ func (x *GetCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCommand.ProtoReflect.Descriptor instead.
 func (*GetCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{20}
+	return file_watchdog_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *GetCommand) GetApplication() string {
@@ -1428,7 +1564,7 @@ type CommandRequest struct {
 
 func (x *CommandRequest) Reset() {
 	*x = CommandRequest{}
-	mi := &file_watchdog_proto_msgTypes[21]
+	mi := &file_watchdog_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1440,7 +1576,7 @@ func (x *CommandRequest) String() string {
 func (*CommandRequest) ProtoMessage() {}
 
 func (x *CommandRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[21]
+	mi := &file_watchdog_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1453,7 +1589,7 @@ func (x *CommandRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandRequest.ProtoReflect.Descriptor instead.
 func (*CommandRequest) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{21}
+	return file_watchdog_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *CommandRequest) GetPayload() isCommandRequest_Payload {
@@ -1597,7 +1733,7 @@ type CommandResponse struct {
 
 func (x *CommandResponse) Reset() {
 	*x = CommandResponse{}
-	mi := &file_watchdog_proto_msgTypes[22]
+	mi := &file_watchdog_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1609,7 +1745,7 @@ func (x *CommandResponse) String() string {
 func (*CommandResponse) ProtoMessage() {}
 
 func (x *CommandResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[22]
+	mi := &file_watchdog_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1622,7 +1758,7 @@ func (x *CommandResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandResponse.ProtoReflect.Descriptor instead.
 func (*CommandResponse) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{22}
+	return file_watchdog_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *CommandResponse) GetAccepted() bool {
@@ -1684,13 +1820,24 @@ const file_watchdog_proto_rawDesc = "" +
 	"\bverified\x18\x05 \x01(\bR\bverified\x12\x1c\n" +
 	"\ttimestamp\x18\x06 \x01(\x04R\ttimestamp\"]\n" +
 	"\x15VerificationEntryList\x12D\n" +
-	"\aentries\x18\x01 \x03(\v2*.artisan.watchdog.VerificationEntryMessageR\aentries\"\xaa\x01\n" +
+	"\aentries\x18\x01 \x03(\v2*.artisan.watchdog.VerificationEntryMessageR\aentries\"\xc4\x02\n" +
 	"\n" +
 	"SystemInfo\x12\x1a\n" +
 	"\bidentity\x18\x01 \x01(\tR\bidentity\x126\n" +
 	"\x17system_apps_initialized\x18\x02 \x01(\bR\x15systemAppsInitialized\x12!\n" +
 	"\fip_addresses\x18\x03 \x03(\tR\vipAddresses\x12%\n" +
-	"\x0emanager_linked\x18\x04 \x01(\bR\rmanagerLinked\"\xa8\x03\n" +
+	"\x0emanager_linked\x18\x04 \x01(\bR\rmanagerLinked\x12)\n" +
+	"\x10security_tripped\x18\x05 \x01(\bR\x0fsecurityTripped\x129\n" +
+	"\x19security_trip_detected_at\x18\x06 \x01(\x04R\x16securityTripDetectedAt\x122\n" +
+	"\x15security_trip_summary\x18\a \x01(\tR\x13securityTripSummary\"i\n" +
+	"\x12SecurityTripStatus\x12\x18\n" +
+	"\atripped\x18\x01 \x01(\bR\atripped\x12\x1f\n" +
+	"\vdetected_at\x18\x02 \x01(\x04R\n" +
+	"detectedAt\x12\x18\n" +
+	"\asummary\x18\x03 \x01(\tR\asummary\"v\n" +
+	"\vVersionInfo\x12)\n" +
+	"\x10watchdog_version\x18\x01 \x01(\tR\x0fwatchdogVersion\x12<\n" +
+	"\x1aartisan_middleware_version\x18\x02 \x01(\tR\x18artisanMiddlewareVersion\"\xa8\x03\n" +
 	"\x0eSetConfigValue\x12%\n" +
 	"\rbuild_command\x18\x01 \x01(\tH\x00R\fbuildCommand\x12!\n" +
 	"\vrun_command\x18\x02 \x01(\tH\x00R\n" +
@@ -1754,14 +1901,16 @@ const file_watchdog_proto_rawDesc = "" +
 	"\"GET_CONFIG_FIELD_WORKING_DIRECTORY\x10\b\x12#\n" +
 	"\x1fGET_CONFIG_FIELD_CHANGES_NEEDED\x10\t\x12&\n" +
 	"\"GET_CONFIG_FIELD_DIR_SCAN_INTERVAL\x10\n" +
-	"2\x8b\x04\n" +
+	"2\xad\x05\n" +
 	"\bWatchdog\x12T\n" +
 	"\x10ListApplications\x12\x17.artisan.watchdog.Empty\x1a'.artisan.watchdog.ApplicationStatusList\x12i\n" +
 	"\x0eGetApplication\x12*.artisan.watchdog.ApplicationStatusRequest\x1a+.artisan.watchdog.ApplicationStatusResponse\x12H\n" +
 	"\n" +
 	"ListBuilds\x12\x17.artisan.watchdog.Empty\x1a!.artisan.watchdog.BuildStatusList\x12U\n" +
 	"\x11ListVerifications\x12\x17.artisan.watchdog.Empty\x1a'.artisan.watchdog.VerificationEntryList\x12F\n" +
-	"\rGetSystemInfo\x12\x17.artisan.watchdog.Empty\x1a\x1c.artisan.watchdog.SystemInfo\x12U\n" +
+	"\rGetSystemInfo\x12\x17.artisan.watchdog.Empty\x1a\x1c.artisan.watchdog.SystemInfo\x12V\n" +
+	"\x15GetSecurityTripStatus\x12\x17.artisan.watchdog.Empty\x1a$.artisan.watchdog.SecurityTripStatus\x12H\n" +
+	"\x0eGetVersionInfo\x12\x17.artisan.watchdog.Empty\x1a\x1d.artisan.watchdog.VersionInfo\x12U\n" +
 	"\x0eExecuteCommand\x12 .artisan.watchdog.CommandRequest\x1a!.artisan.watchdog.CommandResponseB\x1bZ\x19artisan/watchdog;watchdogb\x06proto3"
 
 var (
@@ -1777,7 +1926,7 @@ func file_watchdog_proto_rawDescGZIP() []byte {
 }
 
 var file_watchdog_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_watchdog_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_watchdog_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_watchdog_proto_goTypes = []any{
 	(BuildResult)(0),                  // 0: artisan.watchdog.BuildResult
 	(GetConfigField)(0),               // 1: artisan.watchdog.GetConfigField
@@ -1793,17 +1942,19 @@ var file_watchdog_proto_goTypes = []any{
 	(*VerificationEntryMessage)(nil),  // 11: artisan.watchdog.VerificationEntryMessage
 	(*VerificationEntryList)(nil),     // 12: artisan.watchdog.VerificationEntryList
 	(*SystemInfo)(nil),                // 13: artisan.watchdog.SystemInfo
-	(*SetConfigValue)(nil),            // 14: artisan.watchdog.SetConfigValue
-	(*StartCommand)(nil),              // 15: artisan.watchdog.StartCommand
-	(*StopCommand)(nil),               // 16: artisan.watchdog.StopCommand
-	(*ReloadCommand)(nil),             // 17: artisan.watchdog.ReloadCommand
-	(*RebuildCommand)(nil),            // 18: artisan.watchdog.RebuildCommand
-	(*StatusCommand)(nil),             // 19: artisan.watchdog.StatusCommand
-	(*InfoCommand)(nil),               // 20: artisan.watchdog.InfoCommand
-	(*SetCommand)(nil),                // 21: artisan.watchdog.SetCommand
-	(*GetCommand)(nil),                // 22: artisan.watchdog.GetCommand
-	(*CommandRequest)(nil),            // 23: artisan.watchdog.CommandRequest
-	(*CommandResponse)(nil),           // 24: artisan.watchdog.CommandResponse
+	(*SecurityTripStatus)(nil),        // 14: artisan.watchdog.SecurityTripStatus
+	(*VersionInfo)(nil),               // 15: artisan.watchdog.VersionInfo
+	(*SetConfigValue)(nil),            // 16: artisan.watchdog.SetConfigValue
+	(*StartCommand)(nil),              // 17: artisan.watchdog.StartCommand
+	(*StopCommand)(nil),               // 18: artisan.watchdog.StopCommand
+	(*ReloadCommand)(nil),             // 19: artisan.watchdog.ReloadCommand
+	(*RebuildCommand)(nil),            // 20: artisan.watchdog.RebuildCommand
+	(*StatusCommand)(nil),             // 21: artisan.watchdog.StatusCommand
+	(*InfoCommand)(nil),               // 22: artisan.watchdog.InfoCommand
+	(*SetCommand)(nil),                // 23: artisan.watchdog.SetCommand
+	(*GetCommand)(nil),                // 24: artisan.watchdog.GetCommand
+	(*CommandRequest)(nil),            // 25: artisan.watchdog.CommandRequest
+	(*CommandResponse)(nil),           // 26: artisan.watchdog.CommandResponse
 }
 var file_watchdog_proto_depIdxs = []int32{
 	3,  // 0: artisan.watchdog.ApplicationStatusMessage.stdout:type_name -> artisan.watchdog.StdLogEntry
@@ -1814,30 +1965,34 @@ var file_watchdog_proto_depIdxs = []int32{
 	0,  // 5: artisan.watchdog.BuildStatusMessage.result:type_name -> artisan.watchdog.BuildResult
 	9,  // 6: artisan.watchdog.BuildStatusList.builds:type_name -> artisan.watchdog.BuildStatusMessage
 	11, // 7: artisan.watchdog.VerificationEntryList.entries:type_name -> artisan.watchdog.VerificationEntryMessage
-	14, // 8: artisan.watchdog.SetCommand.value:type_name -> artisan.watchdog.SetConfigValue
+	16, // 8: artisan.watchdog.SetCommand.value:type_name -> artisan.watchdog.SetConfigValue
 	1,  // 9: artisan.watchdog.GetCommand.field:type_name -> artisan.watchdog.GetConfigField
-	15, // 10: artisan.watchdog.CommandRequest.start:type_name -> artisan.watchdog.StartCommand
-	16, // 11: artisan.watchdog.CommandRequest.stop:type_name -> artisan.watchdog.StopCommand
-	17, // 12: artisan.watchdog.CommandRequest.reload:type_name -> artisan.watchdog.ReloadCommand
-	18, // 13: artisan.watchdog.CommandRequest.rebuild:type_name -> artisan.watchdog.RebuildCommand
-	19, // 14: artisan.watchdog.CommandRequest.status:type_name -> artisan.watchdog.StatusCommand
-	20, // 15: artisan.watchdog.CommandRequest.info:type_name -> artisan.watchdog.InfoCommand
-	21, // 16: artisan.watchdog.CommandRequest.set:type_name -> artisan.watchdog.SetCommand
-	22, // 17: artisan.watchdog.CommandRequest.get:type_name -> artisan.watchdog.GetCommand
+	17, // 10: artisan.watchdog.CommandRequest.start:type_name -> artisan.watchdog.StartCommand
+	18, // 11: artisan.watchdog.CommandRequest.stop:type_name -> artisan.watchdog.StopCommand
+	19, // 12: artisan.watchdog.CommandRequest.reload:type_name -> artisan.watchdog.ReloadCommand
+	20, // 13: artisan.watchdog.CommandRequest.rebuild:type_name -> artisan.watchdog.RebuildCommand
+	21, // 14: artisan.watchdog.CommandRequest.status:type_name -> artisan.watchdog.StatusCommand
+	22, // 15: artisan.watchdog.CommandRequest.info:type_name -> artisan.watchdog.InfoCommand
+	23, // 16: artisan.watchdog.CommandRequest.set:type_name -> artisan.watchdog.SetCommand
+	24, // 17: artisan.watchdog.CommandRequest.get:type_name -> artisan.watchdog.GetCommand
 	2,  // 18: artisan.watchdog.Watchdog.ListApplications:input_type -> artisan.watchdog.Empty
 	6,  // 19: artisan.watchdog.Watchdog.GetApplication:input_type -> artisan.watchdog.ApplicationStatusRequest
 	2,  // 20: artisan.watchdog.Watchdog.ListBuilds:input_type -> artisan.watchdog.Empty
 	2,  // 21: artisan.watchdog.Watchdog.ListVerifications:input_type -> artisan.watchdog.Empty
 	2,  // 22: artisan.watchdog.Watchdog.GetSystemInfo:input_type -> artisan.watchdog.Empty
-	23, // 23: artisan.watchdog.Watchdog.ExecuteCommand:input_type -> artisan.watchdog.CommandRequest
-	8,  // 24: artisan.watchdog.Watchdog.ListApplications:output_type -> artisan.watchdog.ApplicationStatusList
-	7,  // 25: artisan.watchdog.Watchdog.GetApplication:output_type -> artisan.watchdog.ApplicationStatusResponse
-	10, // 26: artisan.watchdog.Watchdog.ListBuilds:output_type -> artisan.watchdog.BuildStatusList
-	12, // 27: artisan.watchdog.Watchdog.ListVerifications:output_type -> artisan.watchdog.VerificationEntryList
-	13, // 28: artisan.watchdog.Watchdog.GetSystemInfo:output_type -> artisan.watchdog.SystemInfo
-	24, // 29: artisan.watchdog.Watchdog.ExecuteCommand:output_type -> artisan.watchdog.CommandResponse
-	24, // [24:30] is the sub-list for method output_type
-	18, // [18:24] is the sub-list for method input_type
+	2,  // 23: artisan.watchdog.Watchdog.GetSecurityTripStatus:input_type -> artisan.watchdog.Empty
+	2,  // 24: artisan.watchdog.Watchdog.GetVersionInfo:input_type -> artisan.watchdog.Empty
+	25, // 25: artisan.watchdog.Watchdog.ExecuteCommand:input_type -> artisan.watchdog.CommandRequest
+	8,  // 26: artisan.watchdog.Watchdog.ListApplications:output_type -> artisan.watchdog.ApplicationStatusList
+	7,  // 27: artisan.watchdog.Watchdog.GetApplication:output_type -> artisan.watchdog.ApplicationStatusResponse
+	10, // 28: artisan.watchdog.Watchdog.ListBuilds:output_type -> artisan.watchdog.BuildStatusList
+	12, // 29: artisan.watchdog.Watchdog.ListVerifications:output_type -> artisan.watchdog.VerificationEntryList
+	13, // 30: artisan.watchdog.Watchdog.GetSystemInfo:output_type -> artisan.watchdog.SystemInfo
+	14, // 31: artisan.watchdog.Watchdog.GetSecurityTripStatus:output_type -> artisan.watchdog.SecurityTripStatus
+	15, // 32: artisan.watchdog.Watchdog.GetVersionInfo:output_type -> artisan.watchdog.VersionInfo
+	26, // 33: artisan.watchdog.Watchdog.ExecuteCommand:output_type -> artisan.watchdog.CommandResponse
+	26, // [26:34] is the sub-list for method output_type
+	18, // [18:26] is the sub-list for method input_type
 	18, // [18:18] is the sub-list for extension type_name
 	18, // [18:18] is the sub-list for extension extendee
 	0,  // [0:18] is the sub-list for field type_name
@@ -1849,7 +2004,7 @@ func file_watchdog_proto_init() {
 		return
 	}
 	file_watchdog_proto_msgTypes[3].OneofWrappers = []any{}
-	file_watchdog_proto_msgTypes[12].OneofWrappers = []any{
+	file_watchdog_proto_msgTypes[14].OneofWrappers = []any{
 		(*SetConfigValue_BuildCommand)(nil),
 		(*SetConfigValue_RunCommand)(nil),
 		(*SetConfigValue_DependenciesCommand)(nil),
@@ -1861,7 +2016,7 @@ func file_watchdog_proto_init() {
 		(*SetConfigValue_ChangesNeeded)(nil),
 		(*SetConfigValue_DirScanInterval)(nil),
 	}
-	file_watchdog_proto_msgTypes[21].OneofWrappers = []any{
+	file_watchdog_proto_msgTypes[23].OneofWrappers = []any{
 		(*CommandRequest_Start)(nil),
 		(*CommandRequest_Stop)(nil),
 		(*CommandRequest_Reload)(nil),
@@ -1877,7 +2032,7 @@ func file_watchdog_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_watchdog_proto_rawDesc), len(file_watchdog_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   23,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

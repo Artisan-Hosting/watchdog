@@ -161,8 +161,22 @@ func getSystemInfo(ctx context.Context, client pb.WatchdogClient) {
 	if err != nil {
 		log.Fatalf("GetSystemInfo: %v", err)
 	}
-	fmt.Printf("Identity: %s\nManager Linked: %v\nSystem Apps Initialized: %v\nIPs: %s\n",
-		info.Identity, info.ManagerLinked, info.SystemAppsInitialized, strings.Join(info.IpAddresses, ", "))
+	versions, err := client.GetVersionInfo(ctx, &pb.Empty{})
+	if err != nil {
+		log.Fatalf("GetVersionInfo: %v", err)
+	}
+	fmt.Printf(
+		"Identity: %s\nManager Linked: %v\nSystem Apps Initialized: %v\nSecurity Tripped: %v\nSecurity Trip Detected At: %d\nSecurity Trip Summary: %s\nWatchdog Version: %s\nArtisan Middleware Version: %s\nIPs: %s\n",
+		info.Identity,
+		info.ManagerLinked,
+		info.SystemAppsInitialized,
+		info.SecurityTripped,
+		info.SecurityTripDetectedAt,
+		info.SecurityTripSummary,
+		versions.WatchdogVersion,
+		versions.ArtisanMiddlewareVersion,
+		strings.Join(info.IpAddresses, ", "),
+	)
 }
 
 func getApplicationStatus(ctx context.Context, client pb.WatchdogClient, name string) {
@@ -175,7 +189,19 @@ func getApplicationStatus(ctx context.Context, client pb.WatchdogClient, name st
 		return
 	}
 	app := resp.Status
-	fmt.Printf("App: %s\nStatus: %s\nCPU: %.2f%%\nMem: %.2f MB\n", app.Name, app.Status, app.CpuUsage, app.MemoryUsage)
+	if app.NetworkUsage != nil {
+		fmt.Printf(
+			"App: %s\nStatus: %s\nCPU: %.2f%%\nMem: %.2f MB\nNet RX: %d B\nNet TX: %d B\n",
+			app.Name,
+			app.Status,
+			app.CpuUsage,
+			app.MemoryUsage,
+			app.NetworkUsage.RxBytes,
+			app.NetworkUsage.TxBytes,
+		)
+		return
+	}
+	fmt.Printf("App: %s\nStatus: %s\nCPU: %.2f%%\nMem: %.2f MB\nNet: unavailable\n", app.Name, app.Status, app.CpuUsage, app.MemoryUsage)
 }
 
 func executeSimpleCommand(ctx context.Context, client pb.WatchdogClient, cmd string, app string) {
