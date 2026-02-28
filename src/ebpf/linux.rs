@@ -97,6 +97,10 @@ impl BandwidthTracker {
         let mut map: BpfHashMap<_, u32, TrafficStats> = BpfHashMap::try_from(map_data)
             .map_err(|err| ErrorArrayItem::new(Errors::GeneralError, err.to_string()))?;
 
+        if map.get(&pid, 0).is_ok() {
+            return Ok(());
+        }
+
         let initial = TrafficStats {
             rx_bytes: 0,
             tx_bytes: 0,

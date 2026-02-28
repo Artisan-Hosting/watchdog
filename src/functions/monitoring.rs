@@ -57,8 +57,6 @@ static LAST_SEEN_STATE_PIDS: Lazy<Mutex<HashMap<String, u32>>> =
 static STATE_IO_QUEUE: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 static STDX_UNHEALTHY_LATCH: Lazy<Mutex<HashSet<String>>> =
     Lazy::new(|| Mutex::new(HashSet::new()));
-static NETWORK_USAGE_CACHE: Lazy<Mutex<HashMap<String, NetworkUsage>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
 
 // pub async fn build_critical(name: &str) -> Result<(), ErrorArrayItem> {
 //     let ais_name = definitions::ais_name(name);
@@ -161,12 +159,10 @@ async fn refresh_runtime_health_and_network(
     client_status_store: &definitions::ClientApplicationStatusStore,
     check_stdx: bool,
 ) -> Result<(), ErrorArrayItem> {
-    let mut seen: HashSet<String> = HashSet::new();
     let mut runtime_snapshots: HashMap<String, RuntimeSnapshot> = HashMap::new();
     let mut processes = process_store.try_write().await?;
 
     for (name, process) in processes.iter_mut() {
-        seen.insert(name.clone());
         let mut snapshot = RuntimeSnapshot::default();
         match process {
             definitions::SupervisedProcesses::Child(child) => {
@@ -184,9 +180,9 @@ async fn refresh_runtime_health_and_network(
                     Ok(pid) => {
                         snapshot.pid = Some(pid);
                         snapshot.network_usage =
-                            update_network_usage_cache_for_pid(name, pid).await;
+                            compute_network_usage_for_pid(name, pid).await;
                     }
-                    Err(_) => remove_network_usage_cache_entry(name).await,
+                    Err(_) => snapshot.network_usage = None,
                 }
             }
             definitions::SupervisedProcesses::Process(proc) => {
@@ -200,7 +196,7 @@ async fn refresh_runtime_health_and_network(
                 }
                 let pid = proc.get_pid() as u32;
                 snapshot.pid = Some(pid);
-                snapshot.network_usage = update_network_usage_cache_for_pid(name, pid).await;
+                snapshot.network_usage = compute_network_usage_for_pid(name, pid).await;
             }
         }
         runtime_snapshots.insert(name.clone(), snapshot);
@@ -214,7 +210,6 @@ async fn refresh_runtime_health_and_network(
         &runtime_snapshots,
     )
     .await;
-    prune_network_usage_cache(&seen).await;
     Ok(())
 }
 
@@ -371,34 +366,9 @@ async fn ensure_resource_monitor_healthy_for_process(name: &str, proc: &mut Supe
     }
 }
 
-async fn remove_network_usage_cache_entry(name: &str) {
-    let mut cache = NETWORK_USAGE_CACHE.lock().await;
-    cache.remove(name);
-}
-
-async fn prune_network_usage_cache(valid_names: &HashSet<String>) {
-    let mut cache = NETWORK_USAGE_CACHE.lock().await;
-    cache.retain(|name, _| valid_names.contains(name));
-}
-
-async fn cached_network_usage_for_application(name: &str) -> Option<NetworkUsage> {
-    let cache = NETWORK_USAGE_CACHE.lock().await;
-    cache.get(name).cloned()
-}
-
-async fn update_network_usage_cache_for_pid(name: &str, pid: u32) -> Option<NetworkUsage> {
+async fn compute_network_usage_for_pid(name: &str, pid: u32) -> Option<NetworkUsage> {
     let network_pids = collect_network_tree_pids(pid);
-    register_network_tree_pids(name, &network_pids).await;
-
-    let usage = aggregate_network_usage_for_pids(name, &network_pids);
-    let mut cache = NETWORK_USAGE_CACHE.lock().await;
-    if let Some(usage) = usage {
-        cache.insert(name.to_string(), usage.clone());
-        Some(usage)
-    } else {
-        cache.remove(name);
-        None
-    }
+    aggregate_network_usage_for_pids(name, &network_pids)
 }
 
 async fn apply_runtime_snapshots_to_status_stores(
@@ -899,15 +869,17 @@ async fn observe_supervised_process(
         }
     }
 
-    if let Some(usage) = cached_network_usage_for_application(name).await {
-        if let Some(metrics) = observations.metrics.as_mut() {
-            metrics.other = Some(usage);
-        } else {
-            observations.metrics = Some(Metrics {
-                cpu_usage: 0.0,
-                memory_usage: 0.0,
-                other: Some(usage),
-            });
+    if let Some(pid) = observations.pid {
+        if let Some(usage) = compute_network_usage_for_pid(name, pid).await {
+            if let Some(metrics) = observations.metrics.as_mut() {
+                metrics.other = Some(usage);
+            } else {
+                observations.metrics = Some(Metrics {
+                    cpu_usage: 0.0,
+                    memory_usage: 0.0,
+                    other: Some(usage),
+                });
+            }
         }
     }
 
@@ -1000,20 +972,6 @@ fn collect_network_tree_pids(root_pid: u32) -> Vec<u32> {
             out
         }
         Err(_) => vec![root_pid],
-    }
-}
-
-async fn register_network_tree_pids(name: &str, pids: &[u32]) {
-    for pid in pids {
-        if let Err(err) = ebpf::register_pid_with_retry(*pid).await {
-            log!(
-                LogLevel::Trace,
-                "Failed to register network-tracked PID {} for {}: {}",
-                pid,
-                name,
-                err.err_mesg
-            );
-        }
     }
 }
 
