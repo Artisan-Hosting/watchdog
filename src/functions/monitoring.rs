@@ -1,5 +1,5 @@
 use artisan_middleware::{
-    aggregator::{NetworkUsage, Status},
+    aggregator::{Metrics, NetworkUsage, Status},
     dusa_collection_utils::{
         core::{
             errors::{ErrorArrayItem, Errors},
@@ -35,6 +35,7 @@ use crate::{
         self, ARTISAN_BIN_DIR, ApplicationIdentifiers, ApplicationStatus, SupervisedProcesses,
     },
     ebpf,
+    ledger,
     scripts::{build_application, build_runner_binary, revert_to_vetted},
 };
 
@@ -206,6 +207,7 @@ async fn refresh_runtime_health_and_network(
     }
 
     drop(processes);
+    record_runtime_snapshots_in_ledger(&runtime_snapshots).await;
     apply_runtime_snapshots_to_status_stores(
         system_status_store,
         client_status_store,
@@ -214,6 +216,36 @@ async fn refresh_runtime_health_and_network(
     .await;
     prune_network_usage_cache(&seen).await;
     Ok(())
+}
+
+async fn record_runtime_snapshots_in_ledger(snapshots: &HashMap<String, RuntimeSnapshot>) {
+    let mut entries: Vec<(String, Metrics)> = Vec::new();
+    for (name, snapshot) in snapshots {
+        if let Some(metrics) = runtime_snapshot_to_metrics(snapshot) {
+            entries.push((name.clone(), metrics));
+        }
+    }
+
+    if entries.is_empty() {
+        return;
+    }
+
+    ledger::record_batch(entries).await;
+}
+
+fn runtime_snapshot_to_metrics(snapshot: &RuntimeSnapshot) -> Option<Metrics> {
+    if snapshot.cpu_usage.is_none()
+        && snapshot.memory_usage.is_none()
+        && snapshot.network_usage.is_none()
+    {
+        return None;
+    }
+
+    Some(Metrics {
+        cpu_usage: snapshot.cpu_usage.unwrap_or_default(),
+        memory_usage: snapshot.memory_usage.unwrap_or_default(),
+        other: snapshot.network_usage.clone(),
+    })
 }
 
 fn is_system_application_name(name: &str) -> bool {
@@ -871,7 +903,7 @@ async fn observe_supervised_process(
         if let Some(metrics) = observations.metrics.as_mut() {
             metrics.other = Some(usage);
         } else {
-            observations.metrics = Some(artisan_middleware::aggregator::Metrics {
+            observations.metrics = Some(Metrics {
                 cpu_usage: 0.0,
                 memory_usage: 0.0,
                 other: Some(usage),
@@ -885,7 +917,7 @@ async fn observe_supervised_process(
 async fn backfill_tree_usage_metrics(
     name: &str,
     monitor: &ResourceMonitorLock,
-    metrics: &mut Option<artisan_middleware::aggregator::Metrics>,
+    metrics: &mut Option<Metrics>,
 ) {
     let should_attempt = metrics
         .as_ref()
@@ -926,7 +958,7 @@ async fn backfill_tree_usage_metrics(
         return;
     }
 
-    let entry = metrics.get_or_insert_with(|| artisan_middleware::aggregator::Metrics {
+    let entry = metrics.get_or_insert_with(|| Metrics {
         cpu_usage: 0.0,
         memory_usage: 0.0,
         other: None,
@@ -1154,7 +1186,7 @@ fn current_timestamp_wrapper() -> u64 {
 
 #[derive(Default)]
 struct ProcessObservations {
-    metrics: Option<artisan_middleware::aggregator::Metrics>,
+    metrics: Option<Metrics>,
     stdout: Option<Vec<(u64, String)>>,
     stderr: Option<Vec<(u64, String)>>,
     pid: Option<u32>,

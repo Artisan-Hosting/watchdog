@@ -34,6 +34,7 @@ pub mod ebpf;
 pub mod functions;
 pub mod grpc;
 pub mod kernel_watchdog;
+pub mod ledger;
 pub mod pid_persistence;
 pub mod scripts;
 pub mod security_trip;
@@ -79,6 +80,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
 
     crate::pid_persistence::initialise().await?;
     crate::pid_persistence::reclaim_orphan_processes().await?;
+    crate::ledger::initialise().await?;
 
     if ebpf::manager().is_active() {
         log!(LogLevel::Info, "eBPF network tracking is active");
@@ -150,6 +152,13 @@ async fn main() -> Result<(), ErrorArrayItem> {
                     err
                 );
             }
+        });
+    }
+
+    {
+        log!(LogLevel::Debug, "Launching usage ledger persistence task");
+        tokio::spawn(async move {
+            ledger::run_persistence_loop(Duration::from_secs(10)).await;
         });
     }
 
