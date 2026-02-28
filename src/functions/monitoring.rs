@@ -53,6 +53,8 @@ const STDX_MONITOR_MAX_CONSECUTIVE_FAILURES: u64 = 8;
 static LAST_SEEN_STATE_PIDS: Lazy<Mutex<HashMap<String, u32>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static STATE_IO_QUEUE: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static STDX_UNHEALTHY_LATCH: Lazy<Mutex<HashSet<String>>> =
+    Lazy::new(|| Mutex::new(HashSet::new()));
 
 // pub async fn build_critical(name: &str) -> Result<(), ErrorArrayItem> {
 //     let ais_name = definitions::ais_name(name);
@@ -129,6 +131,21 @@ async fn update_last_seen_pid(name: &str, pid: Option<u32>) {
 
 async fn clear_last_seen_pid(name: &str) {
     update_last_seen_pid(name, None).await;
+}
+
+async fn should_log_stdx_unhealthy(name: &str) -> bool {
+    let mut guard = STDX_UNHEALTHY_LATCH.lock().await;
+    if guard.contains(name) {
+        false
+    } else {
+        guard.insert(name.to_string());
+        true
+    }
+}
+
+async fn mark_stdx_healthy(name: &str) {
+    let mut guard = STDX_UNHEALTHY_LATCH.lock().await;
+    guard.remove(name);
 }
 
 fn should_track_state(state: &AppState) -> bool {
@@ -598,24 +615,29 @@ async fn observe_supervised_process(
                 STDX_MONITOR_MAX_CONSECUTIVE_FAILURES,
             ) {
                 let snapshot = child.stdx_watchdog_snapshot();
-                log!(
-                    LogLevel::Warn,
-                    "Stdx monitor watchdog unhealthy for {} (running={}, starts={}, last_heartbeat_ms={}, consecutive_failures={}); restarting monitor",
-                    name,
-                    snapshot.running,
-                    snapshot.start_count,
-                    snapshot.last_heartbeat_unix_ms,
-                    snapshot.consecutive_failures
-                );
+                if should_log_stdx_unhealthy(name).await {
+                    log!(
+                        LogLevel::Warn,
+                        "Stdx monitor watchdog unhealthy for {} (running={}, starts={}, last_heartbeat_ms={}, consecutive_failures={}); restarting monitor",
+                        name,
+                        snapshot.running,
+                        snapshot.start_count,
+                        snapshot.last_heartbeat_unix_ms,
+                        snapshot.consecutive_failures
+                    );
+                }
                 child.terminate_stdx();
                 child.monitor_stdx().await;
-            } else if !child.monitoring_stdx() {
-                log!(
-                    LogLevel::Warn,
-                    "Stdx monitor task not running for {}; restarting monitor",
-                    name
-                );
-                child.monitor_stdx().await;
+            } else {
+                mark_stdx_healthy(name).await;
+                if !child.monitoring_stdx() {
+                    log!(
+                        LogLevel::Warn,
+                        "Stdx monitor task not running for {}; restarting monitor",
+                        name
+                    );
+                    child.monitor_stdx().await;
+                }
             }
 
             if let Ok(metrics) = child.get_metrics().await {
@@ -632,6 +654,7 @@ async fn observe_supervised_process(
             }
         }
         definitions::SupervisedProcesses::Process(proc) => {
+            mark_stdx_healthy(name).await;
             if !proc.resource_monitor_valid(
                 RESOURCE_MONITOR_MAX_STALENESS,
                 RESOURCE_MONITOR_MAX_CONSECUTIVE_FAILURES,
