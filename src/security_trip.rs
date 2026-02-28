@@ -70,9 +70,10 @@ async fn write_security_audit_line(ctx: &RebootContext) {
     {
         Ok(mut audit_log) => {
             let logged_at = Utc::now().to_rfc3339();
-            let reboot_detected_at = DateTime::<Utc>::from_timestamp(ctx.detected_at_unix as i64, 0)
-                .map(|ts| ts.to_rfc3339())
-                .unwrap_or_else(|| "unknown".to_string());
+            let reboot_detected_at =
+                DateTime::<Utc>::from_timestamp(ctx.detected_at_unix as i64, 0)
+                    .map(|ts| ts.to_rfc3339())
+                    .unwrap_or_else(|| "unknown".to_string());
             let line = format!(
                 "{} source=journalctl_previous_boot reboot_detected_at={} reason=\"{}\" phase=\"{}\" raw=\"{}\"\n",
                 logged_at,

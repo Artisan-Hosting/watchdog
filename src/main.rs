@@ -108,11 +108,15 @@ async fn main() -> Result<(), ErrorArrayItem> {
 
     {
         let process_store = system_process_store.clone();
+        let system_status_store = system_application_status_store.clone();
+        let client_status_store = client_application_status_store.clone();
         log!(LogLevel::Debug, "Launching runtime monitor health task");
         tokio::spawn(async move {
             log!(LogLevel::Trace, "Runtime monitor health loop started");
             monitor_runtime_health(
                 process_store,
+                system_status_store,
+                client_status_store,
                 Duration::from_millis(250),
                 Duration::from_millis(500),
             )

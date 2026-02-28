@@ -354,7 +354,10 @@ impl Watchdog for WatchdogService {
                                     let mut store = build_store.write().await;
                                     store.insert(
                                         application.clone(),
-                                        definitions::BuildStatus::failure(application.clone(), false),
+                                        definitions::BuildStatus::failure(
+                                            application.clone(),
+                                            false,
+                                        ),
                                     );
                                 }
                                 log!(

@@ -10,11 +10,7 @@ use artisan_middleware::{
     process_manager::is_pid_active,
 };
 use aya::programs::ProgramError;
-use aya::{
-    Bpf, include_bytes_aligned,
-    maps::HashMap as BpfHashMap,
-    programs::KProbe,
-};
+use aya::{Bpf, include_bytes_aligned, maps::HashMap as BpfHashMap, programs::KProbe};
 use bytemuck::Zeroable;
 use std::{convert::TryInto, sync::RwLock};
 

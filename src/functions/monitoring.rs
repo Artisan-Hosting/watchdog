@@ -103,7 +103,6 @@ pub async fn monitor_application_states(
                 err.err_mesg
             );
         }
-
     }
 }
 
@@ -114,6 +113,8 @@ pub async fn monitor_application_states(
 /// - eBPF PID registration/aggregation runs at `interval`.
 pub async fn monitor_runtime_health(
     process_store: definitions::ChildProcessArray,
+    system_status_store: definitions::SystemApplicationStatusStore,
+    client_status_store: definitions::ClientApplicationStatusStore,
     interval: Duration,
     stdx_interval: Duration,
 ) {
@@ -128,7 +129,14 @@ pub async fn monitor_runtime_health(
         let divisor = stdx_every.max(1);
         let check_stdx = tick_count % divisor == 0;
 
-        if let Err(err) = refresh_runtime_health_and_network(&process_store, check_stdx).await {
+        if let Err(err) = refresh_runtime_health_and_network(
+            &process_store,
+            &system_status_store,
+            &client_status_store,
+            check_stdx,
+        )
+        .await
+        {
             log!(
                 LogLevel::Warn,
                 "Failed runtime monitor pass: {}",
@@ -148,33 +156,62 @@ pub async fn monitor_runtime_health(
 
 async fn refresh_runtime_health_and_network(
     process_store: &definitions::ChildProcessArray,
+    system_status_store: &definitions::SystemApplicationStatusStore,
+    client_status_store: &definitions::ClientApplicationStatusStore,
     check_stdx: bool,
 ) -> Result<(), ErrorArrayItem> {
     let mut seen: HashSet<String> = HashSet::new();
+    let mut runtime_snapshots: HashMap<String, RuntimeSnapshot> = HashMap::new();
     let mut processes = process_store.try_write().await?;
 
     for (name, process) in processes.iter_mut() {
         seen.insert(name.clone());
+        let mut snapshot = RuntimeSnapshot::default();
         match process {
             definitions::SupervisedProcesses::Child(child) => {
                 ensure_resource_monitor_healthy_for_child(name, child).await;
                 if check_stdx {
                     ensure_stdx_monitor_healthy_for_child(name, child).await;
                 }
+                let mut metrics = child.get_metrics().await.ok();
+                backfill_tree_usage_metrics(name, &child.monitor, &mut metrics).await;
+                if let Some(metrics) = metrics {
+                    snapshot.cpu_usage = Some(metrics.cpu_usage);
+                    snapshot.memory_usage = Some(metrics.memory_usage);
+                }
                 match child.get_pid().await {
-                    Ok(pid) => update_network_usage_cache_for_pid(name, pid).await,
+                    Ok(pid) => {
+                        snapshot.pid = Some(pid);
+                        snapshot.network_usage =
+                            update_network_usage_cache_for_pid(name, pid).await;
+                    }
                     Err(_) => remove_network_usage_cache_entry(name).await,
                 }
             }
             definitions::SupervisedProcesses::Process(proc) => {
                 mark_stdx_healthy(name).await;
                 ensure_resource_monitor_healthy_for_process(name, proc).await;
-                update_network_usage_cache_for_pid(name, proc.get_pid() as u32).await;
+                let mut metrics = proc.get_metrics().await.ok();
+                backfill_tree_usage_metrics(name, &proc.monitor, &mut metrics).await;
+                if let Some(metrics) = metrics {
+                    snapshot.cpu_usage = Some(metrics.cpu_usage);
+                    snapshot.memory_usage = Some(metrics.memory_usage);
+                }
+                let pid = proc.get_pid() as u32;
+                snapshot.pid = Some(pid);
+                snapshot.network_usage = update_network_usage_cache_for_pid(name, pid).await;
             }
         }
+        runtime_snapshots.insert(name.clone(), snapshot);
     }
 
     drop(processes);
+    apply_runtime_snapshots_to_status_stores(
+        system_status_store,
+        client_status_store,
+        &runtime_snapshots,
+    )
+    .await;
     prune_network_usage_cache(&seen).await;
     Ok(())
 }
@@ -317,16 +354,57 @@ async fn cached_network_usage_for_application(name: &str) -> Option<NetworkUsage
     cache.get(name).cloned()
 }
 
-async fn update_network_usage_cache_for_pid(name: &str, pid: u32) {
+async fn update_network_usage_cache_for_pid(name: &str, pid: u32) -> Option<NetworkUsage> {
     let network_pids = collect_network_tree_pids(pid);
     register_network_tree_pids(name, &network_pids).await;
 
+    let usage = aggregate_network_usage_for_pids(name, &network_pids);
     let mut cache = NETWORK_USAGE_CACHE.lock().await;
-    if let Some(usage) = aggregate_network_usage_for_pids(name, &network_pids) {
-        cache.insert(name.to_string(), usage);
+    if let Some(usage) = usage {
+        cache.insert(name.to_string(), usage.clone());
+        Some(usage)
     } else {
         cache.remove(name);
+        None
     }
+}
+
+async fn apply_runtime_snapshots_to_status_stores(
+    system_status_store: &definitions::SystemApplicationStatusStore,
+    client_status_store: &definitions::ClientApplicationStatusStore,
+    snapshots: &HashMap<String, RuntimeSnapshot>,
+) {
+    let now = current_timestamp_wrapper();
+    {
+        let mut store = system_status_store.write().await;
+        for (name, snapshot) in snapshots {
+            if let Some(status) = store.get_mut(name) {
+                apply_runtime_snapshot(status, snapshot, now);
+            }
+        }
+    }
+    {
+        let mut store = client_status_store.write().await;
+        for (name, snapshot) in snapshots {
+            if let Some(status) = store.get_mut(name) {
+                apply_runtime_snapshot(status, snapshot, now);
+            }
+        }
+    }
+}
+
+fn apply_runtime_snapshot(status: &mut ApplicationStatus, snapshot: &RuntimeSnapshot, now: u64) {
+    if let Some(cpu_usage) = snapshot.cpu_usage {
+        status.cpu_usage = cpu_usage;
+    }
+    if let Some(memory_usage) = snapshot.memory_usage {
+        status.memory_usage = memory_usage;
+    }
+    if let Some(pid) = snapshot.pid {
+        status.pid = Some(pid);
+    }
+    status.network_usage = snapshot.network_usage.clone();
+    status.last_updated = now;
 }
 
 fn should_track_state(state: &AppState) -> bool {
@@ -848,12 +926,11 @@ async fn backfill_tree_usage_metrics(
         return;
     }
 
-    let entry = metrics
-        .get_or_insert_with(|| artisan_middleware::aggregator::Metrics {
-            cpu_usage: 0.0,
-            memory_usage: 0.0,
-            other: None,
-        });
+    let entry = metrics.get_or_insert_with(|| artisan_middleware::aggregator::Metrics {
+        cpu_usage: 0.0,
+        memory_usage: 0.0,
+        other: None,
+    });
 
     if tree_cpu > entry.cpu_usage {
         entry.cpu_usage = tree_cpu;
@@ -1080,6 +1157,14 @@ struct ProcessObservations {
     metrics: Option<artisan_middleware::aggregator::Metrics>,
     stdout: Option<Vec<(u64, String)>>,
     stderr: Option<Vec<(u64, String)>>,
+    pid: Option<u32>,
+}
+
+#[derive(Default, Clone)]
+struct RuntimeSnapshot {
+    cpu_usage: Option<f32>,
+    memory_usage: Option<f64>,
+    network_usage: Option<NetworkUsage>,
     pid: Option<u32>,
 }
 
