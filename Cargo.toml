@@ -1,6 +1,6 @@
 [package]
 name = "ais_watchdog"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 
 [dependencies]
@@ -25,6 +25,7 @@ byteorder = "1.5"
 tss-esapi = "7"          # TPM 2.0 bindings
 getrandom = "0.2"
 rand = { version = "0.8", features = ["std"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 [build-dependencies]
 tonic-build = "0.12"

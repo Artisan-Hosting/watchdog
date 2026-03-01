@@ -1,8 +1,11 @@
 use std::{fmt::Write, io::ErrorKind, time::Duration};
 
-use artisan_middleware::dusa_collection_utils::{
-    core::{logger::LogLevel, types::rb::RollingBuffer},
-    log,
+use artisan_middleware::{
+    dusa_collection_utils::{
+        core::{logger::LogLevel, types::rb::RollingBuffer},
+        log,
+    },
+    timestamp::current_timestamp,
 };
 use tokio::net::UnixListener;
 use tokio_stream::wrappers::UnixListenerStream;
@@ -13,6 +16,7 @@ use crate::{
     definitions::{self, ApplicationStatus, BuildStatus, VerificationEntry},
     functions,
     grpc::proto::command_request::Payload,
+    ledger,
 };
 
 pub mod proto {
@@ -23,7 +27,8 @@ use proto::{
     ApplicationStatusList, ApplicationStatusMessage, ApplicationStatusRequest,
     ApplicationStatusResponse, BuildStatusList, BuildStatusMessage, CommandRequest,
     CommandResponse, Empty, NetworkUsageMessage, SecurityTripStatus, StdLogEntry, SystemInfo,
-    VerificationEntryList, VerificationEntryMessage, VersionInfo,
+    UsageQueryRequest, UsageQueryResponse, VerificationEntryList, VerificationEntryMessage,
+    VersionInfo,
     watchdog_server::{Watchdog, WatchdogServer},
 };
 
@@ -246,6 +251,57 @@ impl Watchdog for WatchdogService {
         _request: Request<Empty>,
     ) -> Result<Response<VersionInfo>, Status> {
         Ok(Response::new(version_info_to_proto()))
+    }
+
+    async fn query_usage(
+        &self,
+        request: Request<UsageQueryRequest>,
+    ) -> Result<Response<UsageQueryResponse>, Status> {
+        let msg = request.into_inner();
+        if msg.application.trim().is_empty() {
+            return Err(Status::invalid_argument("application is required"));
+        }
+
+        let mut start = msg.start;
+        let mut end = if msg.end == 0 {
+            current_timestamp()
+        } else {
+            msg.end
+        };
+
+        if start == 0 {
+            start = end.saturating_sub(86_400); // default to last 24h
+        }
+
+        if end < start {
+            std::mem::swap(&mut start, &mut end);
+        }
+
+        match ledger::summarize_usage(&msg.application, start, end).await {
+            Ok(Some(summary)) => Ok(Response::new(UsageQueryResponse {
+                found: true,
+                application: summary.application,
+                start: summary.start,
+                end: summary.end,
+                avg_cpu: f64::from(summary.avg_cpu),
+                peak_mem: summary.peak_mem,
+                total_rx: summary.total_rx,
+                total_tx: summary.total_tx,
+                sample_count: summary.samples,
+            })),
+            Ok(None) => Ok(Response::new(UsageQueryResponse {
+                found: false,
+                application: msg.application,
+                start,
+                end,
+                avg_cpu: 0.0,
+                peak_mem: 0.0,
+                total_rx: 0,
+                total_tx: 0,
+                sample_count: 0,
+            })),
+            Err(err) => Err(Status::internal(err.err_mesg)),
+        }
     }
 
     async fn execute_command(
