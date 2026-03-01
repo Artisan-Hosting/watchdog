@@ -92,6 +92,7 @@ type UsageQueryResponse struct {
 	TotalRx       uint64                 `protobuf:"varint,7,opt,name=total_rx,json=totalRx,proto3" json:"total_rx,omitempty"`
 	TotalTx       uint64                 `protobuf:"varint,8,opt,name=total_tx,json=totalTx,proto3" json:"total_tx,omitempty"`
 	SampleCount   uint64                 `protobuf:"varint,9,opt,name=sample_count,json=sampleCount,proto3" json:"sample_count,omitempty"`
+	AvgMem        float64                `protobuf:"fixed64,10,opt,name=avg_mem,json=avgMem,proto3" json:"avg_mem,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -189,6 +190,13 @@ func (x *UsageQueryResponse) GetSampleCount() uint64 {
 	return 0
 }
 
+func (x *UsageQueryResponse) GetAvgMem() float64 {
+	if x != nil {
+		return x.AvgMem
+	}
+	return 0
+}
+
 var File_usage_query_proto protoreflect.FileDescriptor
 
 const file_usage_query_proto_rawDesc = "" +
@@ -197,7 +205,7 @@ const file_usage_query_proto_rawDesc = "" +
 	"\x11UsageQueryRequest\x12 \n" +
 	"\vapplication\x18\x01 \x01(\tR\vapplication\x12\x14\n" +
 	"\x05start\x18\x02 \x01(\x04R\x05start\x12\x10\n" +
-	"\x03end\x18\x03 \x01(\x04R\x03end\"\x81\x02\n" +
+	"\x03end\x18\x03 \x01(\x04R\x03end\"\x9a\x02\n" +
 	"\x12UsageQueryResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12 \n" +
 	"\vapplication\x18\x02 \x01(\tR\vapplication\x12\x14\n" +
@@ -207,7 +215,9 @@ const file_usage_query_proto_rawDesc = "" +
 	"\bpeak_mem\x18\x06 \x01(\x01R\apeakMem\x12\x19\n" +
 	"\btotal_rx\x18\a \x01(\x04R\atotalRx\x12\x19\n" +
 	"\btotal_tx\x18\b \x01(\x04R\atotalTx\x12!\n" +
-	"\fsample_count\x18\t \x01(\x04R\vsampleCountB\x1bZ\x19artisan/watchdog;watchdogb\x06proto3"
+	"\fsample_count\x18\t \x01(\x04R\vsampleCount\x12\x17\n" +
+	"\aavg_mem\x18\n" +
+	" \x01(\x01R\x06avgMemB\x1bZ\x19artisan/watchdog;watchdogb\x06proto3"
 
 var (
 	file_usage_query_proto_rawDescOnce sync.Once

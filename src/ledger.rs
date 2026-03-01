@@ -23,6 +23,7 @@ pub struct UsageSummary {
     pub start: u64,
     pub end: u64,
     pub avg_cpu: f32,
+    pub avg_mem: f64,
     pub peak_mem: f64,
     pub total_rx: u64,
     pub total_tx: u64,
@@ -209,6 +210,7 @@ fn summarize_window(
         SELECT
             COUNT(*) as samples,
             COALESCE(AVG(cpu), 0.0) AS avg_cpu,
+            COALESCE(AVG(mem), 0.0) AS avg_mem,
             COALESCE(MAX(mem), 0.0) AS peak_mem,
             COALESCE(SUM(rx), 0) AS total_rx,
             COALESCE(SUM(tx), 0) AS total_tx
@@ -221,14 +223,15 @@ fn summarize_window(
     .query_row(params![name, start as i64, end as i64], |row| {
         let samples: u64 = row.get::<_, i64>(0)? as u64;
         let avg_cpu: f32 = row.get(1)?;
-        let peak_mem: f64 = row.get(2)?;
-        let total_rx: u64 = row.get::<_, i64>(3)? as u64;
-        let total_tx: u64 = row.get::<_, i64>(4)? as u64;
+        let avg_mem: f64 = row.get(2)?;
+        let peak_mem: f64 = row.get(3)?;
+        let total_rx: u64 = row.get::<_, i64>(4)? as u64;
+        let total_tx: u64 = row.get::<_, i64>(5)? as u64;
 
-        Ok((samples, avg_cpu, peak_mem, total_rx, total_tx))
+        Ok((samples, avg_cpu, avg_mem, peak_mem, total_rx, total_tx))
     })
     .map_err(|err| ErrorArrayItem::new(Errors::InputOutput, err.to_string()))
-    .map(|(samples, avg_cpu, peak_mem, total_rx, total_tx)| {
+    .map(|(samples, avg_cpu, avg_mem, peak_mem, total_rx, total_tx)| {
         if samples == 0 {
             None
         } else {
@@ -237,6 +240,7 @@ fn summarize_window(
                 start,
                 end,
                 avg_cpu,
+                avg_mem,
                 peak_mem,
                 total_rx,
                 total_tx,

@@ -19,4 +19,5 @@ message UsageQueryResponse {
   uint64 total_rx = 7;
   uint64 total_tx = 8;
   uint64 sample_count = 9;
+  double avg_mem = 10;
 }

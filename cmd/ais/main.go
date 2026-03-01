@@ -293,12 +293,13 @@ func queryUsage(ctx context.Context, conn *grpc.ClientConn, app string, start, e
 	rxHuman := humanBytes(resp.TotalRx)
 	txHuman := humanBytes(resp.TotalTx)
 	fmt.Printf(
-		"Usage for %s (%d samples)\n  Window: %s -> %s\n  Avg CPU: %.2f%%\n  Peak Mem: %.2f MB\n  Net RX: %s\n  Net TX: %s\n",
+		"Usage for %s (%d samples)\n  Window: %s -> %s\n  Avg CPU: %.2f%%\n  Avg Mem: %.2f MB\n  Peak Mem: %.2f MB\n  Net RX: %s\n  Net TX: %s\n",
 		resp.Application,
 		resp.SampleCount,
 		formatTimestamp(resp.Start),
 		formatTimestamp(resp.End),
 		resp.AvgCpu,
+		resp.AvgMem,
 		resp.PeakMem,
 		rxHuman,
 		txHuman,
