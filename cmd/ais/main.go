@@ -87,7 +87,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`Usage: watchdog-cli [command] [args]
+	fmt.Println(`Usage: ais [command] [args]
 
 Commands:
   list
@@ -102,15 +102,15 @@ Commands:
   usage <application> [start] [end]
 
 Examples:
-  watchdog-cli get myapp log_level
-  watchdog-cli set myapp memory_cap 256
-  watchdog-cli start myapp
+  ais get myapp log_level
+  ais set myapp memory_cap 256
+  ais start myapp
 `)
 }
 
 func requireArgs(args []string, n int, usage string) {
 	if len(args) < n {
-		fmt.Printf("Usage: watchdog-cli %s\n", usage)
+		fmt.Printf("Usage: ais %s\n", usage)
 		os.Exit(1)
 	}
 }
@@ -290,16 +290,18 @@ func queryUsage(ctx context.Context, conn *grpc.ClientConn, app string, start, e
 		fmt.Printf("No usage data for %s in the requested window.\n", app)
 		return
 	}
+	rxHuman := humanBytes(resp.TotalRx)
+	txHuman := humanBytes(resp.TotalTx)
 	fmt.Printf(
-		"Usage for %s (%d samples)\n  Window: %s -> %s\n  Avg CPU: %.2f%%\n  Peak Mem: %.2f MB\n  Net RX: %d B\n  Net TX: %d B\n",
+		"Usage for %s (%d samples)\n  Window: %s -> %s\n  Avg CPU: %.2f%%\n  Peak Mem: %.2f MB\n  Net RX: %s\n  Net TX: %s\n",
 		resp.Application,
 		resp.SampleCount,
 		formatTimestamp(resp.Start),
 		formatTimestamp(resp.End),
 		resp.AvgCpu,
 		resp.PeakMem,
-		resp.TotalRx,
-		resp.TotalTx,
+		rxHuman,
+		txHuman,
 	)
 }
 
@@ -339,6 +341,25 @@ func parseUintArg(raw string) (uint64, error) {
 		return 0, err
 	}
 	return value, nil
+}
+
+func humanBytes(value uint64) string {
+	const (
+		KB = 1024.0
+		MB = KB * 1024
+		GB = MB * 1024
+	)
+	val := float64(value)
+	switch {
+	case val >= GB:
+		return fmt.Sprintf("%.2f GB", val/GB)
+	case val >= MB:
+		return fmt.Sprintf("%.2f MB", val/MB)
+	case val >= KB:
+		return fmt.Sprintf("%.2f KB", val/KB)
+	default:
+		return fmt.Sprintf("%d B", value)
+	}
 }
 
 func getFieldEnum(name string) (pb.GetConfigField, bool) {
