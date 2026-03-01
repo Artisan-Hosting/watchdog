@@ -75,6 +75,10 @@ func main() {
 	case "set":
 		requireArgs(args, 3, "set <application> <field> <value>")
 		executeSetCommand(ctx, client, args[0], args[1], args[2])
+	case "usage":
+		requireArgs(args, 1, "usage <application> [start] [end]")
+		start, end := parseWindowArgs(args[1:])
+		queryUsage(ctx, conn, args[0], start, end)
 	default:
 		fmt.Printf("Unknown command: %s\n\n", command)
 		printUsage()
@@ -95,6 +99,7 @@ Commands:
   rebuild <application>
   get <application> <field>
   set <application> <field> <value>
+  usage <application> [start] [end]
 
 Examples:
   watchdog-cli get myapp log_level
@@ -269,6 +274,71 @@ func executeSetCommand(ctx context.Context, client pb.WatchdogClient, app, field
 		log.Fatalf("ExecuteCommand (set): %v", err)
 	}
 	fmt.Printf("[SET] accepted=%v message=%s\n", resp.Accepted, resp.Message)
+}
+
+func queryUsage(ctx context.Context, conn *grpc.ClientConn, app string, start, end uint64) {
+	req := &pb.UsageQueryRequest{
+		Application: app,
+		Start:       start,
+		End:         end,
+	}
+	resp := &pb.UsageQueryResponse{}
+	if err := conn.Invoke(ctx, "/artisan.watchdog.Watchdog/QueryUsage", req, resp); err != nil {
+		log.Fatalf("QueryUsage: %v", err)
+	}
+	if !resp.Found {
+		fmt.Printf("No usage data for %s in the requested window.\n", app)
+		return
+	}
+	fmt.Printf(
+		"Usage for %s (%d samples)\n  Window: %s -> %s\n  Avg CPU: %.2f%%\n  Peak Mem: %.2f MB\n  Net RX: %d B\n  Net TX: %d B\n",
+		resp.Application,
+		resp.SampleCount,
+		formatTimestamp(resp.Start),
+		formatTimestamp(resp.End),
+		resp.AvgCpu,
+		resp.PeakMem,
+		resp.TotalRx,
+		resp.TotalTx,
+	)
+}
+
+func formatTimestamp(ts uint64) string {
+	if ts == 0 {
+		return "(unset)"
+	}
+	return time.Unix(int64(ts), 0).UTC().Format(time.RFC3339)
+}
+
+func parseWindowArgs(args []string) (uint64, uint64) {
+	var start, end uint64
+	var err error
+	if len(args) >= 1 {
+		start, err = parseUintArg(args[0])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid start timestamp: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	if len(args) >= 2 {
+		end, err = parseUintArg(args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid end timestamp: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	return start, end
+}
+
+func parseUintArg(raw string) (uint64, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return value, nil
 }
 
 func getFieldEnum(name string) (pb.GetConfigField, bool) {

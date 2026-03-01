@@ -39,6 +39,24 @@ message ApplicationStatusList {
   repeated ApplicationStatusMessage applications = 1;
 }
 
+message UsageQueryRequest {
+  string application = 1;
+  uint64 start = 2;
+  uint64 end = 3;
+}
+
+message UsageQueryResponse {
+  bool found = 1;
+  string application = 2;
+  uint64 start = 3;
+  uint64 end = 4;
+  double avg_cpu = 5;
+  double peak_mem = 6;
+  uint64 total_rx = 7;
+  uint64 total_tx = 8;
+  uint64 sample_count = 9;
+}
+
 enum BuildResult {
   BUILD_RESULT_UNSPECIFIED = 0;
   BUILD_RESULT_SUCCESS = 1;
@@ -178,4 +196,5 @@ service Watchdog {
   rpc GetSecurityTripStatus(Empty) returns (SecurityTripStatus);
   rpc GetVersionInfo(Empty) returns (VersionInfo);
   rpc ExecuteCommand(CommandRequest) returns (CommandResponse);
+  rpc QueryUsage(UsageQueryRequest) returns (UsageQueryResponse);
 }
