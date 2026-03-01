@@ -45,8 +45,8 @@ pub async fn record_batch(entries: Vec<(String, Metrics)>) {
         return;
     }
 
-    let guard = CONNECTION.lock().await;
-    let Some(conn) = guard.as_ref() else {
+    let mut guard = CONNECTION.lock().await;
+    let Some(conn) = guard.as_mut() else {
         return;
     };
 
@@ -120,7 +120,7 @@ fn initialise_schema(conn: &Connection) -> Result<(), ErrorArrayItem> {
     })
 }
 
-fn insert_samples(conn: &Connection, entries: Vec<(String, Metrics)>) -> Result<(), ErrorArrayItem> {
+fn insert_samples(conn: &mut Connection, entries: Vec<(String, Metrics)>) -> Result<(), ErrorArrayItem> {
     let tx = conn.transaction().map_err(|err| {
         ErrorArrayItem::new(
             Errors::InputOutput,

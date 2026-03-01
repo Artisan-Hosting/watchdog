@@ -300,7 +300,7 @@ impl Watchdog for WatchdogService {
                 total_tx: 0,
                 sample_count: 0,
             })),
-            Err(err) => Err(Status::internal(err.err_mesg)),
+            Err(err) => Err(Status::internal(err.err_mesg.to_string())),
         }
     }
 

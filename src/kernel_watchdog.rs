@@ -31,11 +31,13 @@ use prost::Message;
 use sha2::Sha256;
 use std::convert::TryFrom;
 use std::str::FromStr;
+#[cfg(target_os = "linux")]
 use tss_esapi::tcti_ldr::DeviceConfig;
+#[cfg(target_os = "linux")]
 use tss_esapi::{
-    Context, TctiNameConf,
     handles::{NvIndexHandle, NvIndexTpmHandle},
     interface_types::resource_handles::NvAuth,
+    Context, TctiNameConf,
     structures::{Auth, MaxNvBuffer},
 };
 
@@ -89,6 +91,7 @@ ioctl_none!(awdog_ioctl_unreg, AWDOG_IOC_MAGIC, AWDOG_IOCTL_UNREG_NR);
 /// a background thread that periodically emits authenticated heartbeats. Any
 /// errors encountered while registering are surfaced to the caller so they can
 /// be logged by the application bootstrap code.
+#[cfg(target_os = "linux")]
 pub fn start_kernel_watchdog() -> Result<(), ErrorArrayItem> {
     let root_k = unseal_root_k_from_tpm()?;
     let kc = hkdf_derive_kc(&root_k, &AWDOG_MODULE_UUID);
@@ -140,6 +143,14 @@ pub fn start_kernel_watchdog() -> Result<(), ErrorArrayItem> {
         .map_err(ErrorArrayItem::from)?;
 
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn start_kernel_watchdog() -> Result<(), ErrorArrayItem> {
+    Err(ErrorArrayItem::new(
+        Errors::GeneralError,
+        "Kernel watchdog is only supported on Linux targets",
+    ))
 }
 
 /// Continuously emit heartbeats to the kernel watchdog module until an error
@@ -221,6 +232,7 @@ fn hkdf_derive_kc(root_k: &[u8; AWDOG_KEY_LEN], module_uuid: &[u8; 16]) -> [u8; 
 }
 
 /// Retrieve the watchdog root key from the TPM NV index defined in `tpm_plan.md`.
+#[cfg(target_os = "linux")]
 fn unseal_root_k_from_tpm() -> Result<[u8; AWDOG_KEY_LEN], ErrorArrayItem> {
     const ROOT_NV_INDEX: u32 = 0x0150_0020; // see tpm_plan.md for provisioning details
 
