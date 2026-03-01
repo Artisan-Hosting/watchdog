@@ -34,7 +34,7 @@ pub const CARGO_ROOT_BIN: &str = "/root/.cargo/bin/cargo";
 pub const CARGO_SYSTEM_BIN: &str = "cargo";
 
 /// Path to the ledger file expected on every host.
-pub const LEDGER_PATH: &str = "/opt/artisan/ledger.json";
+pub const LEDGER_PATH: &str = "/opt/artisan/ledger.db";
 /// Directory where archived usage ledgers are stored.
 pub const LEDGER_ARCHIVE_DIR: &str = "/opt/artisan/usage";
 /// Path to the git credential file required during verification.
