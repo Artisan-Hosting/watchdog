@@ -18,7 +18,9 @@ use tokio::sync::RwLock;
 use crate::functions::get_all_ipv4;
 
 /// Base directory housing all Artisan applications.
-pub const ARTISAN_APPS_DIR: &str = "/opt/artisan/apps";
+pub const ARTISAN_APPS_DIR: &str = "/opt/artisan/src";
+/// Base config directory housing all Artisan applications.
+pub const ARTISAN_CONF_DIR: &str = "/opt/artisan/etc";
 /// Directory where built binaries are deployed.
 pub const ARTISAN_BIN_DIR: &str = "/opt/artisan/bin";
 /// Directory storing vetted build artifacts.
@@ -34,11 +36,11 @@ pub const CARGO_ROOT_BIN: &str = "/root/.cargo/bin/cargo";
 pub const CARGO_SYSTEM_BIN: &str = "cargo";
 
 /// Path to the ledger file expected on every host.
-pub const LEDGER_PATH: &str = "/opt/artisan/ledger.db";
+pub const LEDGER_PATH: &str = "/opt/artisan/usage/ledger.db";
 /// Directory where archived usage ledgers are stored.
 pub const LEDGER_ARCHIVE_DIR: &str = "/opt/artisan/usage";
 /// Path to the git credential file required during verification.
-pub const GIT_CONFIG_PATH: &str = "/opt/artisan/git.cf";
+pub const GIT_CONFIG_PATH: &str = "/opt/artisan/etc/git.cf";
 /// Path to the main build helper script shipped with the platform.
 pub const BUILD_SCRIPT_PATH: &str = "/opt/artisan/scripts/build.sh";
 /// Path to the runner build helper script shipped with the platform.
@@ -56,10 +58,10 @@ pub const APP_MAILLER: &str = "mailler";
 pub const APP_WELCOME: &str = "welcome";
 
 /// Path to the AIS runner source tree.
-pub const AIS_RUNNER_SRC_DIR: &str = "/opt/artisan/apps/ais_runner";
+pub const AIS_RUNNER_SRC_DIR: &str = "/opt/artisan/src/ais_runner";
 
 /// String prefix used when constructing build log file names.
-pub const BUILD_LOG_PREFIX: &str = "build";
+pub const BUILD_LOG_PREFIX: &str = "build_";
 
 /// Git branch that watchdog pulls during automated builds.
 pub const RELEASE_BRANCH: &str = "release";
@@ -68,13 +70,13 @@ pub const RELEASE_BRANCH: &str = "release";
 pub const VETTED_LATEST_SUFFIX: &str = "_latest";
 
 /// Maximum number of stdout/stderr entries we retain per application.
-pub const APPLICATION_STD_BUFFER_SIZE: usize = 500;
+pub const APPLICATION_STD_BUFFER_SIZE: usize = 1000;
 /// Filesystem path to the watchdog gRPC Unix domain socket.
 pub const WATCHDOG_SOCKET_PATH: &str = "/tmp/artisan_watchdog.sock";
 /// Location where we persist encrypted PID ledgers for crash recovery.
-pub const WATCHDOG_PID_LEDGER_PATH: &str = "/tmp/.artisan_watchdog_pids";
+pub const WATCHDOG_PID_LEDGER_PATH: &str = "/opt/artisan/tmp/.artisan_watchdog_pids";
 /// Marker file written by kernel/userland trip reporting path.
-pub const WATCHDOG_TAMPER_FLAG_PATH: &str = "/var/log/.ais_tamper";
+pub const WATCHDOG_TAMPER_FLAG_PATH: &str = "/opt/artisan/log/.ais_tamper";
 /// Audit log where watchdog records consumed tamper markers.
 pub const WATCHDOG_SECURITY_AUDIT_LOG_PATH: &str = "/opt/artisan/log/security_trip_audit.log";
 
