@@ -21,14 +21,9 @@ static __always_inline void update_stats(__u32 pid, ssize_t bytes, bool is_tx) {
     if (bytes <= 0)
         return;
 
-    struct traffic_stats zero = {};
     struct traffic_stats *stats = bpf_map_lookup_elem(&pid_traffic_map, &pid);
-    if (!stats) {
-        bpf_map_update_elem(&pid_traffic_map, &pid, &zero, BPF_ANY);
-        stats = bpf_map_lookup_elem(&pid_traffic_map, &pid);
-        if (!stats)
-            return;
-    }
+    if (!stats)
+        return;
 
     if (is_tx) {
         __sync_fetch_and_add(&stats->tx_bytes, bytes);

@@ -10,7 +10,7 @@ use artisan_middleware::{
     process_manager::is_pid_active,
 };
 use aya::programs::ProgramError;
-use aya::{Bpf, include_bytes_aligned, maps::HashMap as BpfHashMap, programs::KProbe};
+use aya::{Ebpf, include_bytes_aligned, maps::HashMap as BpfHashMap, programs::KProbe};
 use bytemuck::Zeroable;
 use std::{convert::TryInto, sync::RwLock};
 
@@ -33,13 +33,13 @@ impl TrafficStats {
 }
 
 pub struct BandwidthTracker {
-    bpf: RwLock<Bpf>,
+    bpf: RwLock<Ebpf>,
 }
 
 impl BandwidthTracker {
     pub fn new() -> Result<Self, ErrorArrayItem> {
         let bpf_data = include_bytes_aligned!(env!("EBPF_OBJECT"));
-        let mut bpf = Bpf::load(bpf_data)
+        let mut bpf = Ebpf::load(bpf_data)
             .map_err(|err| ErrorArrayItem::new(Errors::GeneralError, err.to_string()))?;
 
         let probes = [
