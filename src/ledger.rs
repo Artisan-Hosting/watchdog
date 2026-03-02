@@ -212,8 +212,10 @@ fn summarize_window(
             COALESCE(AVG(cpu), 0.0) AS avg_cpu,
             COALESCE(AVG(mem), 0.0) AS avg_mem,
             COALESCE(MAX(mem), 0.0) AS peak_mem,
-            COALESCE(SUM(rx), 0) AS total_rx,
-            COALESCE(SUM(tx), 0) AS total_tx
+            COALESCE(MAX(rx), 0) AS max_rx,
+            COALESCE(MIN(rx), 0) AS min_rx,
+            COALESCE(MAX(tx), 0) AS max_tx,
+            COALESCE(MIN(tx), 0) AS min_tx
         FROM samples
         WHERE app_name = ?1
           AND ts BETWEEN ?2 AND ?3
@@ -225,8 +227,12 @@ fn summarize_window(
         let avg_cpu: f32 = row.get(1)?;
         let avg_mem: f64 = row.get(2)?;
         let peak_mem: f64 = row.get(3)?;
-        let total_rx: u64 = row.get::<_, i64>(4)? as u64;
-        let total_tx: u64 = row.get::<_, i64>(5)? as u64;
+        let max_rx: u64 = row.get::<_, i64>(4)? as u64;
+        let min_rx: u64 = row.get::<_, i64>(5)? as u64;
+        let max_tx: u64 = row.get::<_, i64>(6)? as u64;
+        let min_tx: u64 = row.get::<_, i64>(7)? as u64;
+        let total_rx = max_rx.saturating_sub(min_rx);
+        let total_tx = max_tx.saturating_sub(min_tx);
 
         Ok((samples, avg_cpu, avg_mem, peak_mem, total_rx, total_tx))
     })
