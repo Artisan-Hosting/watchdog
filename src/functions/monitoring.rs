@@ -856,20 +856,27 @@ pub async fn start_application_stub(
     application: &str,
     stores: &[ProcessStoreHandle],
 ) -> Result<CommandStubResult, ErrorArrayItem> {
-    let is_system_app = definitions::CRITICAL_APPLICATIONS
-        .iter()
-        .any(|system_app| system_app.ais == application);
+    let Some((resolved_application, is_system_app)) =
+        resolve_start_application(application).await?
+    else {
+        return Ok(CommandStubResult::new(
+            false,
+            format!(
+                "[stub] start command rejected for {application}; application is not in the allowed system/client runtime inventory"
+            ),
+        ));
+    };
 
     '_select_target_store: {
-        let handle = match take_process_by_name(application, stores).await {
+        let handle = match take_process_by_name(&resolved_application, stores).await {
             Ok(Some((handle, _stale_process))) => {
                 log!(
                     LogLevel::Debug,
                     "Found existing (possibly stale) entry for {} in {:?}, replacing it",
-                    application,
+                    resolved_application,
                     handle.kind()
                 );
-                handle.remove(application).await.ok();
+                handle.remove(&resolved_application).await.ok();
                 handle
             }
             Ok(None) => {
@@ -892,8 +899,37 @@ pub async fn start_application_stub(
             Err(err) => return Err(err),
         };
 
-        return start_with_handle(application, handle, is_system_app).await;
+        return start_with_handle(&resolved_application, handle, is_system_app).await;
     }
+}
+
+async fn resolve_start_application(
+    requested: &str,
+) -> Result<Option<(String, bool)>, ErrorArrayItem> {
+    let input = requested.trim();
+    if input.is_empty() {
+        return Ok(None);
+    }
+
+    for system_app in definitions::CRITICAL_APPLICATIONS {
+        if input == system_app.ais || input == system_app.canonical {
+            return Ok(Some((system_app.ais.to_string(), true)));
+        }
+    }
+
+    let safe_clients = generate_safe_client_runner_list().await?;
+    if safe_clients.contains(&input.to_string()) {
+        return Ok(Some((input.to_string(), false)));
+    }
+
+    if !input.starts_with("ais_") {
+        let prefixed = format!("ais_{}", input);
+        if safe_clients.contains(&prefixed) {
+            return Ok(Some((prefixed, false)));
+        }
+    }
+
+    Ok(None)
 }
 
 /// Launches the process using a pre-selected handle/store target.

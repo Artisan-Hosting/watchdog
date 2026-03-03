@@ -116,7 +116,10 @@ impl WatchdogService {
         system_information_store: definitions::SystemInformationStore,
         process_store: definitions::ChildProcessArray,
     ) -> Self {
-        let process_handles = vec![functions::ProcessStoreHandle::system(&process_store)];
+        let process_handles = vec![
+            functions::ProcessStoreHandle::system(&process_store),
+            functions::ProcessStoreHandle::client(&process_store),
+        ];
         Self {
             system_application_status_store,
             client_application_status_store,
