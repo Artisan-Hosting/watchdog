@@ -1,5 +1,6 @@
 //! Runtime monitoring and process-control functions exposed to gRPC handlers.
 
+use crate::definitions::ARTISAN_TMP_DIR;
 use crate::functions::inventory::generate_safe_client_runner_list;
 use crate::{
     definitions::{self, ARTISAN_BIN_DIR, ApplicationStatus, SupervisedProcesses},
@@ -46,6 +47,11 @@ const WWW_DATA_UID: u32 = 33;
 const WWW_DATA_GID: u32 = 33;
 const ROOT_USER: &str = "root";
 const ROOT_HOME: &str = "/root";
+const CLIENT_CACHE_HOME: &str = "/tmp/.ais_client_cache";
+const CLIENT_GO_PATH: &str = "/tmp/.ais_client_go";
+const CLIENT_GO_BUILD_CACHE: &str = "/tmp/.ais_client_cache/go-build";
+const CLIENT_GO_MOD_CACHE: &str = "/tmp/.ais_client_cache/go-mod";
+const CLIENT_GO_TMP_DIR: &str = "/tmp/.ais_client_cache/go-tmp";
 const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const RESOURCE_MONITOR_MAX_STALENESS: Duration = Duration::from_millis(1_500);
 const RESOURCE_MONITOR_MAX_CONSECUTIVE_FAILURES: u64 = 5;
@@ -777,7 +783,14 @@ pub fn configure_client_runtime_command(command: &mut Command, run_as_www_data: 
     command.env("SHELL", "/bin/bash");
     command.env("LANG", "C.UTF-8");
     command.env("LC_ALL", "C.UTF-8");
-    command.env("TMPDIR", "/tmp");
+    command.env("TMPDIR", ARTISAN_TMP_DIR);
+    command.env("XDG_CACHE_HOME", CLIENT_CACHE_HOME);
+    command.env("GOPATH", CLIENT_GO_PATH);
+    command.env("GOCACHE", CLIENT_GO_BUILD_CACHE);
+    command.env("GOMODCACHE", CLIENT_GO_MOD_CACHE);
+    command.env("GOTMPDIR", CLIENT_GO_TMP_DIR);
+    // Ignore host/user Go env files so client builds stay deterministic.
+    command.env("GOENV", "off");
     command.env("RUST_BACKTRACE", "0");
 
     #[cfg(target_os = "linux")]
