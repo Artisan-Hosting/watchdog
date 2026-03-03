@@ -34,8 +34,7 @@ use crate::{
     definitions::{
         self, ARTISAN_BIN_DIR, ApplicationIdentifiers, ApplicationStatus, SupervisedProcesses,
     },
-    ebpf,
-    ledger,
+    ebpf, ledger,
     scripts::{build_application, build_runner_binary, revert_to_vetted},
 };
 
@@ -179,8 +178,7 @@ async fn refresh_runtime_health_and_network(
                 match child.get_pid().await {
                     Ok(pid) => {
                         snapshot.pid = Some(pid);
-                        snapshot.network_usage =
-                            compute_network_usage_for_pid(name, pid).await;
+                        snapshot.network_usage = compute_network_usage_for_pid(name, pid).await;
                     }
                     Err(_) => snapshot.network_usage = None,
                 }
@@ -592,6 +590,7 @@ async fn refresh_system_statuses_once(
 
         let app_status = merge_state_and_observations(state, observations, true)
             .expect("system applications should always produce a status");
+        persist_application_logs(app.ais, &app_status).await;
 
         new_statuses.insert(app.ais.to_string(), app_status);
     }
@@ -646,6 +645,7 @@ async fn refresh_system_statuses_once(
 
                 if let Some(status) = merge_state_and_observations(Some(state), observations, true)
                 {
+                    persist_application_logs(ais_name, &status).await;
                     new_statuses.insert(ais_name.to_string(), status);
                     known_names.insert(ais_name.to_string());
                 }
@@ -706,6 +706,7 @@ async fn refresh_client_statuses_once(
         let observations = collect_process_observations(process_store, &name).await?;
 
         if let Some(status) = merge_state_and_observations(state, observations, false) {
+            persist_application_logs(&name, &status).await;
             new_statuses.insert(name.clone(), status);
         }
     }
@@ -750,6 +751,7 @@ async fn refresh_client_statuses_once(
                         ProcessObservations::default(),
                         false,
                     ) {
+                        persist_application_logs(ais_name, &status).await;
                         new_statuses.insert(ais_name.to_string(), status);
                     }
 
@@ -1064,6 +1066,32 @@ fn merge_state_and_observations(
         stderr_buffer,
         network_usage,
     ))
+}
+
+async fn persist_application_logs(name: &str, status: &ApplicationStatus) {
+    let stdout_entries = status.stdout.get_latest_time();
+    if let Err(err) =
+        ledger::record_stream_entries(name, ledger::LogStream::Stdout, &stdout_entries).await
+    {
+        log!(
+            LogLevel::Trace,
+            "Failed to persist stdout logs for {}: {}",
+            name,
+            err.err_mesg
+        );
+    }
+
+    let stderr_entries = status.stderr.get_latest_time();
+    if let Err(err) =
+        ledger::record_stream_entries(name, ledger::LogStream::Stderr, &stderr_entries).await
+    {
+        log!(
+            LogLevel::Trace,
+            "Failed to persist stderr logs for {}: {}",
+            name,
+            err.err_mesg
+        );
+    }
 }
 
 /// Collects all IPv4 addresses on the host, excluding localhost and

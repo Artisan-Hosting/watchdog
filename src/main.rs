@@ -18,7 +18,9 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::task::JoinSet;
 
 use crate::{
-    definitions::{self as defs, ARTISAN_BIN_DIR, ARTISAN_CONF_DIR, CRITICAL_APPLICATIONS, VerificationEntry},
+    definitions::{
+        self as defs, ARTISAN_BIN_DIR, ARTISAN_CONF_DIR, CRITICAL_APPLICATIONS, VerificationEntry,
+    },
     functions::{
         generate_safe_client_runner_list, monitor_application_states, monitor_runtime_health,
         verify_path,
@@ -155,16 +157,16 @@ async fn main() -> Result<(), ErrorArrayItem> {
         });
     }
 
-    '_hash_verification: { 
+    '_hash_verification: {
         // TODO This should be upgraded, we can't practically hash the db. And the git file can be modified between wetchdog runs.
-        // TODO What we should do is using the simple encryption funs in our lib, on shutdown we should generate hashes of everyfile in 
-        // TODO /opt/artisan/vetted/ opt/artisan/bin/ and /opt/artisan/etc, and when we re-initialize we checks all of those hases against 
+        // TODO What we should do is using the simple encryption funs in our lib, on shutdown we should generate hashes of everyfile in
+        // TODO /opt/artisan/vetted/ opt/artisan/bin/ and /opt/artisan/etc, and when we re-initialize we checks all of those hases against
         // TODO what we have stored and if there is a descrepency we panic, or trip the kernel watchdog. it's important that we generate a new
-        // TODO checksum every shutdown because we can and do frequently change these files while the system is running, the goal for this hash 
+        // TODO checksum every shutdown because we can and do frequently change these files while the system is running, the goal for this hash
         // TODO check is to ensure that the system is up healthy and monitoring all changes so we can go back and audit and keep track of things
         // TODO While we're building and testing this there should be a flag or something we can set to ignore the hashes since we're changing things
-        // TODO frequently. Ideally in it's finished form we'll leverage our file monitoring library and monitor all of those dirs and log any file or 
-        // TODO folder change 
+        // TODO frequently. Ideally in it's finished form we'll leverage our file monitoring library and monitor all of those dirs and log any file or
+        // TODO folder change
         log!(
             LogLevel::Debug,
             "Starting verification of {} core paths",

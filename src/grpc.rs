@@ -26,9 +26,11 @@ pub mod proto {
 use proto::{
     ApplicationStatusList, ApplicationStatusMessage, ApplicationStatusRequest,
     ApplicationStatusResponse, BuildStatusList, BuildStatusMessage, CommandRequest,
-    CommandResponse, Empty, NetworkUsageMessage, SecurityTripStatus, StdLogEntry, SystemInfo,
-    UsageQueryRequest, UsageQueryResponse, VerificationEntryList, VerificationEntryMessage,
-    VersionInfo,
+    CommandResponse, CurrentLogsRequest, CurrentLogsResponse, Empty,
+    HistoricalLogRecord as HistoricalLogRecordMessage, HistoricalLogsRequest,
+    HistoricalLogsResponse, LogStream, NetworkUsageMessage, SecurityTripStatus, StdLogEntry,
+    SystemInfo, UsageQueryRequest, UsageQueryResponse, VerificationEntryList,
+    VerificationEntryMessage, VersionInfo,
     watchdog_server::{Watchdog, WatchdogServer},
 };
 
@@ -194,6 +196,103 @@ impl Watchdog for WatchdogService {
         };
 
         Ok(Response::new(response))
+    }
+
+    async fn get_current_logs(
+        &self,
+        request: Request<CurrentLogsRequest>,
+    ) -> Result<Response<CurrentLogsResponse>, Status> {
+        let msg = request.into_inner();
+        if msg.application.trim().is_empty() {
+            return Err(Status::invalid_argument("application is required"));
+        }
+
+        let limit = if msg.limit == 0 {
+            200usize
+        } else {
+            msg.limit as usize
+        };
+
+        match self.lookup_application_status(&msg.application).await {
+            Some((_, status)) => {
+                let stdout = tail_proto_entries(status.stdout.get_latest_time(), limit);
+                let stderr = tail_proto_entries(status.stderr.get_latest_time(), limit);
+
+                Ok(Response::new(CurrentLogsResponse {
+                    found: true,
+                    application: msg.application,
+                    stdout,
+                    stderr,
+                    last_updated: status.last_updated,
+                }))
+            }
+            None => Ok(Response::new(CurrentLogsResponse {
+                found: false,
+                application: msg.application,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+                last_updated: 0,
+            })),
+        }
+    }
+
+    async fn query_historical_logs(
+        &self,
+        request: Request<HistoricalLogsRequest>,
+    ) -> Result<Response<HistoricalLogsResponse>, Status> {
+        let msg = request.into_inner();
+        if msg.application.trim().is_empty() {
+            return Err(Status::invalid_argument("application is required"));
+        }
+
+        let mut start = msg.start;
+        let mut end = if msg.end == 0 {
+            current_timestamp()
+        } else {
+            msg.end
+        };
+        if start == 0 {
+            start = end.saturating_sub(86_400);
+        }
+        if end < start {
+            std::mem::swap(&mut start, &mut end);
+        }
+
+        let stream_filter = ledger_stream_filter_from_proto(msg.stream);
+        let stream = normalize_proto_stream(msg.stream);
+        let page = ledger::query_historical_logs(
+            &msg.application,
+            stream_filter,
+            start,
+            end,
+            msg.cursor,
+            msg.limit,
+        )
+        .await
+        .map_err(|err| Status::internal(err.err_mesg.to_string()))?;
+
+        let entries: Vec<HistoricalLogRecordMessage> = page
+            .entries
+            .into_iter()
+            .map(|entry| HistoricalLogRecordMessage {
+                id: entry.id,
+                application: entry.application,
+                stream: proto_stream_from_ledger(entry.stream) as i32,
+                timestamp: entry.timestamp,
+                line: entry.line,
+            })
+            .collect();
+
+        Ok(Response::new(HistoricalLogsResponse {
+            found: !entries.is_empty(),
+            application: msg.application,
+            start,
+            end,
+            stream: stream as i32,
+            entries,
+            next_cursor: page.next_cursor,
+            has_more: page.has_more,
+        }))
     }
 
     async fn list_builds(
@@ -529,6 +628,16 @@ fn rolling_buffer_to_proto_entries(buffer: &RollingBuffer) -> Vec<StdLogEntry> {
         .collect()
 }
 
+fn tail_proto_entries(entries: Vec<(u64, String)>, limit: usize) -> Vec<StdLogEntry> {
+    let total = entries.len();
+    let start_idx = total.saturating_sub(limit);
+    entries
+        .into_iter()
+        .skip(start_idx)
+        .map(|(timestamp, line)| StdLogEntry { timestamp, line })
+        .collect()
+}
+
 fn build_status_to_proto(status: BuildStatus) -> BuildStatusMessage {
     let result = match status.status {
         definitions::SimpleStatus::Successful => 1,
@@ -595,5 +704,29 @@ fn network_usage_to_proto(
     NetworkUsageMessage {
         rx_bytes: usage.rx_bytes,
         tx_bytes: usage.tx_bytes,
+    }
+}
+
+fn ledger_stream_filter_from_proto(stream: i32) -> ledger::LogStreamFilter {
+    match LogStream::try_from(stream).unwrap_or(LogStream::Unspecified) {
+        LogStream::Stdout => ledger::LogStreamFilter::Stdout,
+        LogStream::Stderr => ledger::LogStreamFilter::Stderr,
+        LogStream::Both | LogStream::Unspecified => ledger::LogStreamFilter::Both,
+    }
+}
+
+fn normalize_proto_stream(stream: i32) -> LogStream {
+    match LogStream::try_from(stream).unwrap_or(LogStream::Unspecified) {
+        LogStream::Stdout => LogStream::Stdout,
+        LogStream::Stderr => LogStream::Stderr,
+        LogStream::Both => LogStream::Both,
+        LogStream::Unspecified => LogStream::Both,
+    }
+}
+
+fn proto_stream_from_ledger(stream: ledger::LogStream) -> LogStream {
+    match stream {
+        ledger::LogStream::Stdout => LogStream::Stdout,
+        ledger::LogStream::Stderr => LogStream::Stderr,
     }
 }

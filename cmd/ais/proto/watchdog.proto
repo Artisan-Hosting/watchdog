@@ -9,6 +9,13 @@ message StdLogEntry {
   string line = 2;
 }
 
+enum LogStream {
+  LOG_STREAM_UNSPECIFIED = 0;
+  LOG_STREAM_STDOUT = 1;
+  LOG_STREAM_STDERR = 2;
+  LOG_STREAM_BOTH = 3;
+}
+
 message NetworkUsageMessage {
   uint64 rx_bytes = 1;
   uint64 tx_bytes = 2;
@@ -37,6 +44,47 @@ message ApplicationStatusResponse {
 
 message ApplicationStatusList {
   repeated ApplicationStatusMessage applications = 1;
+}
+
+message CurrentLogsRequest {
+  string application = 1;
+  uint32 limit = 2;
+}
+
+message CurrentLogsResponse {
+  bool found = 1;
+  string application = 2;
+  repeated StdLogEntry stdout = 3;
+  repeated StdLogEntry stderr = 4;
+  uint64 last_updated = 5;
+}
+
+message HistoricalLogsRequest {
+  string application = 1;
+  uint64 start = 2;
+  uint64 end = 3;
+  LogStream stream = 4;
+  uint32 limit = 5;
+  uint64 cursor = 6;
+}
+
+message HistoricalLogRecord {
+  uint64 id = 1;
+  string application = 2;
+  LogStream stream = 3;
+  uint64 timestamp = 4;
+  string line = 5;
+}
+
+message HistoricalLogsResponse {
+  bool found = 1;
+  string application = 2;
+  uint64 start = 3;
+  uint64 end = 4;
+  LogStream stream = 5;
+  repeated HistoricalLogRecord entries = 6;
+  uint64 next_cursor = 7;
+  bool has_more = 8;
 }
 
 message UsageQueryRequest {
@@ -191,6 +239,8 @@ message CommandResponse {
 service Watchdog {
   rpc ListApplications(Empty) returns (ApplicationStatusList);
   rpc GetApplication(ApplicationStatusRequest) returns (ApplicationStatusResponse);
+  rpc GetCurrentLogs(CurrentLogsRequest) returns (CurrentLogsResponse);
+  rpc QueryHistoricalLogs(HistoricalLogsRequest) returns (HistoricalLogsResponse);
   rpc ListBuilds(Empty) returns (BuildStatusList);
   rpc ListVerifications(Empty) returns (VerificationEntryList);
   rpc GetSystemInfo(Empty) returns (SystemInfo);

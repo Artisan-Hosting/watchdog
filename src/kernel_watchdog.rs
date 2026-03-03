@@ -35,9 +35,9 @@ use std::str::FromStr;
 use tss_esapi::tcti_ldr::DeviceConfig;
 #[cfg(target_os = "linux")]
 use tss_esapi::{
+    Context, TctiNameConf,
     handles::{NvIndexHandle, NvIndexTpmHandle},
     interface_types::resource_handles::NvAuth,
-    Context, TctiNameConf,
     structures::{Auth, MaxNvBuffer},
 };
 
