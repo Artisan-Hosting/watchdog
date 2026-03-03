@@ -1,6 +1,5 @@
 //! Runtime monitoring and process-control functions exposed to gRPC handlers.
 
-use crate::definitions::ARTISAN_TMP_DIR;
 use crate::functions::inventory::generate_safe_client_runner_list;
 use crate::{
     definitions::{self, ARTISAN_BIN_DIR, ApplicationStatus, SupervisedProcesses},
@@ -29,7 +28,7 @@ use once_cell::sync::Lazy;
 use std::{
     collections::{HashMap, HashSet},
     convert::TryFrom,
-    io,
+    fs, io,
     process::Stdio,
     time::Duration,
 };
@@ -47,11 +46,13 @@ const WWW_DATA_UID: u32 = 33;
 const WWW_DATA_GID: u32 = 33;
 const ROOT_USER: &str = "root";
 const ROOT_HOME: &str = "/root";
-const CLIENT_CACHE_HOME: &str = "/tmp/.ais_client_cache";
-const CLIENT_GO_PATH: &str = "/tmp/.ais_client_go";
-const CLIENT_GO_BUILD_CACHE: &str = "/tmp/.ais_client_cache/go-build";
-const CLIENT_GO_MOD_CACHE: &str = "/tmp/.ais_client_cache/go-mod";
-const CLIENT_GO_TMP_DIR: &str = "/tmp/.ais_client_cache/go-tmp";
+const CLIENT_CACHE_HOME: &str = "/var/www/.cache/ais_watchdog";
+const CLIENT_GO_PATH: &str = "/var/www/.local/share/ais_go";
+const CLIENT_GO_BIN_DIR: &str = "/var/www/.local/share/ais_go/bin";
+const CLIENT_GO_BUILD_CACHE: &str = "/var/www/.cache/ais_watchdog/go-build";
+const CLIENT_GO_MOD_CACHE: &str = "/var/www/.cache/ais_watchdog/go-mod";
+const CLIENT_GO_TMP_DIR: &str = "/var/www/.cache/ais_watchdog/go-tmp";
+const CLIENT_LOCAL_BIN_DIR: &str = "/var/www/.local/bin";
 const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const RESOURCE_MONITOR_MAX_STALENESS: Duration = Duration::from_millis(1_500);
 const RESOURCE_MONITOR_MAX_CONSECUTIVE_FAILURES: u64 = 5;
@@ -759,6 +760,8 @@ pub fn configure_www_data_command(command: &mut Command) {
 /// Otherwise it runs as root but still gets the same environment reset and
 /// sandbox defaults.
 pub fn configure_client_runtime_command(command: &mut Command, run_as_www_data: bool) {
+    prepare_client_runtime_directories(run_as_www_data);
+
     let (user, home) = if run_as_www_data {
         command.uid(WWW_DATA_UID);
         command.gid(WWW_DATA_GID);
@@ -773,7 +776,8 @@ pub fn configure_client_runtime_command(command: &mut Command, run_as_www_data: 
     command.kill_on_drop(true);
 
     let node_bin = format!("{}/versions/node/v23.5.0/bin", WWW_DATA_NVM_DIR);
-    let combined_path = format!("{node_bin}:{DEFAULT_PATH}");
+    let combined_path =
+        format!("{node_bin}:{CLIENT_LOCAL_BIN_DIR}:{CLIENT_GO_BIN_DIR}:{DEFAULT_PATH}");
 
     command.env("HOME", home);
     command.env("USER", user);
@@ -783,7 +787,7 @@ pub fn configure_client_runtime_command(command: &mut Command, run_as_www_data: 
     command.env("SHELL", "/bin/bash");
     command.env("LANG", "C.UTF-8");
     command.env("LC_ALL", "C.UTF-8");
-    command.env("TMPDIR", ARTISAN_TMP_DIR);
+    command.env("TMPDIR", CLIENT_GO_TMP_DIR);
     command.env("XDG_CACHE_HOME", CLIENT_CACHE_HOME);
     command.env("GOPATH", CLIENT_GO_PATH);
     command.env("GOCACHE", CLIENT_GO_BUILD_CACHE);
@@ -806,6 +810,44 @@ pub fn configure_client_runtime_command(command: &mut Command, run_as_www_data: 
 
             Ok(())
         });
+    }
+}
+
+fn prepare_client_runtime_directories(run_as_www_data: bool) {
+    let runtime_dirs = [
+        CLIENT_CACHE_HOME,
+        CLIENT_GO_PATH,
+        CLIENT_GO_BIN_DIR,
+        CLIENT_GO_BUILD_CACHE,
+        CLIENT_GO_MOD_CACHE,
+        CLIENT_GO_TMP_DIR,
+        CLIENT_LOCAL_BIN_DIR,
+    ];
+
+    for dir in runtime_dirs {
+        if let Err(err) = fs::create_dir_all(dir) {
+            log!(
+                LogLevel::Warn,
+                "Failed to create client runtime dir {}: {}",
+                dir,
+                err
+            );
+        }
+    }
+
+    if run_as_www_data {
+        #[cfg(unix)]
+        for dir in runtime_dirs {
+            if let Err(err) = std::os::unix::fs::chown(dir, Some(WWW_DATA_UID), Some(WWW_DATA_GID))
+            {
+                log!(
+                    LogLevel::Trace,
+                    "Failed to chown client runtime dir {} to www-data: {}",
+                    dir,
+                    err
+                );
+            }
+        }
     }
 }
 
