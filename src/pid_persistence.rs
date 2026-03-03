@@ -9,13 +9,14 @@ use artisan_middleware::{
     encryption::{simple_decrypt, simple_encrypt},
     process_manager::SupervisedProcess,
 };
+use nix::sys::signal::{Signal::SIGKILL, kill as send_signal};
 use nix::unistd::Pid;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, io::ErrorKind};
 use tokio::fs;
 
-use crate::definitions::WATCHDOG_PID_LEDGER_PATH;
+use crate::{definitions::WATCHDOG_PID_LEDGER_PATH, runtime_flags::runtime_flags};
 
 static PID_CACHE: Lazy<tokio::sync::Mutex<HashMap<String, u32>>> =
     Lazy::new(|| tokio::sync::Mutex::new(HashMap::new()));
@@ -98,6 +99,7 @@ pub async fn reclaim_orphan_processes() -> Result<(), ErrorArrayItem> {
 
     let mut reclaimed: Vec<String> = Vec::new();
     let mut failed: Vec<String> = Vec::new();
+    let kill_on_drop = runtime_flags().kill_on_drop;
 
     for (name, pid) in entries {
         if is_pid_marked_dead(pid).await {
@@ -107,8 +109,15 @@ pub async fn reclaim_orphan_processes() -> Result<(), ErrorArrayItem> {
         let pid_i32 = match pid.try_into() {
             Ok(value) => value,
             Err(_) => {
-                mark_pid_dead(pid).await;
-                failed.push(format!("{} ({}) - pid exceeds platform limits", name, pid));
+                if kill_on_drop {
+                    failed.push(format!(
+                        "{} ({}) - pid exceeds platform limits; dropped due to --kill-on-drop",
+                        name, pid
+                    ));
+                } else {
+                    mark_pid_dead(pid).await;
+                    failed.push(format!("{} ({}) - pid exceeds platform limits", name, pid));
+                }
                 continue;
             }
         };
@@ -120,13 +129,21 @@ pub async fn reclaim_orphan_processes() -> Result<(), ErrorArrayItem> {
                     reclaimed.push(format!("{} ({})", name, pid));
                 }
                 Err(err) => {
-                    mark_pid_dead(pid).await;
-                    failed.push(format!("{} ({}) - {}", name, pid, err.err_mesg));
+                    if kill_on_drop {
+                        force_kill_tracked_pid(pid_i32, pid, &name, &mut failed).await;
+                    } else {
+                        mark_pid_dead(pid).await;
+                        failed.push(format!("{} ({}) - {}", name, pid, err.err_mesg));
+                    }
                 }
             },
             Err(err) => {
-                mark_pid_dead(pid).await;
-                failed.push(format!("{} ({}) - {}", name, pid, err.err_mesg));
+                if kill_on_drop {
+                    force_kill_tracked_pid(pid_i32, pid, &name, &mut failed).await;
+                } else {
+                    mark_pid_dead(pid).await;
+                    failed.push(format!("{} ({}) - {}", name, pid, err.err_mesg));
+                }
             }
         }
     }
@@ -219,4 +236,23 @@ async fn persist_to_disk(cache: &HashMap<String, u32>) -> Result<(), ErrorArrayI
                 format!("Failed to write PID ledger: {}", err),
             )
         })
+}
+
+async fn force_kill_tracked_pid(pid_i32: i32, pid_u32: u32, name: &str, failed: &mut Vec<String>) {
+    match send_signal(Pid::from_raw(pid_i32), SIGKILL) {
+        Ok(_) => {
+            remove_dead_pid(pid_u32).await;
+            failed.push(format!(
+                "{} ({}) - failed reattach; force-killed due to --kill-on-drop",
+                name, pid_u32
+            ));
+        }
+        Err(err) => {
+            mark_pid_dead(pid_u32).await;
+            failed.push(format!(
+                "{} ({}) - failed reattach; force-kill failed: {}",
+                name, pid_u32, err
+            ));
+        }
+    }
 }

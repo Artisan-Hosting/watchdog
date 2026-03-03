@@ -8,4 +8,4 @@ pub use monitoring::{
     get_all_ipv4, monitor_application_states, monitor_runtime_health, rebuild_application_stub,
     reload_application_stub, start_application_stub, stop_application_stub, take_process_by_name,
 };
-pub use verification::verify_path;
+pub use verification::{persist_shutdown_integrity_manifest, verify_startup_integrity};

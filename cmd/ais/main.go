@@ -78,7 +78,23 @@ func main() {
 	case "usage":
 		requireArgs(args, 1, "usage <application> [start] [end]")
 		start, end := parseWindowArgs(args[1:])
-		queryUsage(ctx, conn, args[0], start, end)
+		queryUsage(ctx, client, args[0], start, end)
+	case "logs-current":
+		requireArgs(args, 1, "logs-current <application> [limit]")
+		limit, err := parseOptionalUint32(args, 1)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid limit: %v\n", err)
+			os.Exit(1)
+		}
+		getCurrentLogs(ctx, client, args[0], limit)
+	case "logs-history":
+		requireArgs(args, 1, "logs-history <application> [stream] [start] [end] [limit] [cursor]")
+		stream, start, end, limit, cursor, err := parseHistoricalArgs(args[1:])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid logs-history args: %v\n", err)
+			os.Exit(1)
+		}
+		queryHistoricalLogs(ctx, client, args[0], stream, start, end, limit, cursor)
 	default:
 		fmt.Printf("Unknown command: %s\n\n", command)
 		printUsage()
@@ -100,11 +116,15 @@ Commands:
   get <application> <field>
   set <application> <field> <value>
   usage <application> [start] [end]
+  logs-current <application> [limit]
+  logs-history <application> [stream] [start] [end] [limit] [cursor]
 
 Examples:
   ais get myapp log_level
   ais set myapp memory_cap 256
   ais start myapp
+  ais logs-current ais_manager 200
+  ais logs-history ais_manager both 0 0 300 0
 `)
 }
 
@@ -276,14 +296,14 @@ func executeSetCommand(ctx context.Context, client pb.WatchdogClient, app, field
 	fmt.Printf("[SET] accepted=%v message=%s\n", resp.Accepted, resp.Message)
 }
 
-func queryUsage(ctx context.Context, conn *grpc.ClientConn, app string, start, end uint64) {
+func queryUsage(ctx context.Context, client pb.WatchdogClient, app string, start, end uint64) {
 	req := &pb.UsageQueryRequest{
 		Application: app,
 		Start:       start,
 		End:         end,
 	}
-	resp := &pb.UsageQueryResponse{}
-	if err := conn.Invoke(ctx, "/artisan.watchdog.Watchdog/QueryUsage", req, resp); err != nil {
+	resp, err := client.QueryUsage(ctx, req)
+	if err != nil {
 		log.Fatalf("QueryUsage: %v", err)
 	}
 	if !resp.Found {
@@ -304,6 +324,89 @@ func queryUsage(ctx context.Context, conn *grpc.ClientConn, app string, start, e
 		rxHuman,
 		txHuman,
 	)
+}
+
+func getCurrentLogs(ctx context.Context, client pb.WatchdogClient, app string, limit uint32) {
+	req := &pb.CurrentLogsRequest{
+		Application: app,
+		Limit:       limit,
+	}
+	resp, err := client.GetCurrentLogs(ctx, req)
+	if err != nil {
+		log.Fatalf("GetCurrentLogs: %v", err)
+	}
+	if !resp.Found {
+		fmt.Printf("Application '%s' not found.\n", app)
+		return
+	}
+
+	fmt.Printf("Current logs for %s (last_updated=%s)\n", resp.Application, formatTimestamp(resp.LastUpdated))
+	if len(resp.Stdout) == 0 && len(resp.Stderr) == 0 {
+		fmt.Println("No current log entries.")
+		return
+	}
+
+	if len(resp.Stdout) > 0 {
+		fmt.Println("STDOUT:")
+		for _, entry := range resp.Stdout {
+			fmt.Printf("  [%s] %s\n", formatTimestamp(entry.Timestamp), entry.Line)
+		}
+	}
+	if len(resp.Stderr) > 0 {
+		fmt.Println("STDERR:")
+		for _, entry := range resp.Stderr {
+			fmt.Printf("  [%s] %s\n", formatTimestamp(entry.Timestamp), entry.Line)
+		}
+	}
+}
+
+func queryHistoricalLogs(
+	ctx context.Context,
+	client pb.WatchdogClient,
+	app string,
+	stream pb.LogStream,
+	start, end uint64,
+	limit uint32,
+	cursor uint64,
+) {
+	req := &pb.HistoricalLogsRequest{
+		Application: app,
+		Start:       start,
+		End:         end,
+		Stream:      stream,
+		Limit:       limit,
+		Cursor:      cursor,
+	}
+	resp, err := client.QueryHistoricalLogs(ctx, req)
+	if err != nil {
+		log.Fatalf("QueryHistoricalLogs: %v", err)
+	}
+
+	if !resp.Found {
+		fmt.Printf("No historical logs for %s in requested window.\n", app)
+		return
+	}
+
+	fmt.Printf(
+		"Historical logs for %s\n  Window: %s -> %s\n  Stream: %s\n  Entries: %d\n  Next Cursor: %d\n  Has More: %v\n",
+		resp.Application,
+		formatTimestamp(resp.Start),
+		formatTimestamp(resp.End),
+		resp.Stream.String(),
+		len(resp.Entries),
+		resp.NextCursor,
+		resp.HasMore,
+	)
+
+	for _, entry := range resp.Entries {
+		fmt.Printf(
+			"  [%d][%s][%s] %s\n",
+			entry.Id,
+			formatTimestamp(entry.Timestamp),
+			entry.Stream.String(),
+			entry.Line,
+		)
+	}
 }
 
 func formatTimestamp(ts uint64) string {
@@ -331,6 +434,80 @@ func parseWindowArgs(args []string) (uint64, uint64) {
 		}
 	}
 	return start, end
+}
+
+func parseOptionalUint32(args []string, index int) (uint32, error) {
+	if len(args) <= index {
+		return 0, nil
+	}
+	value, err := strconv.ParseUint(args[index], 10, 32)
+	if err != nil {
+		return 0, err
+	}
+	return uint32(value), nil
+}
+
+func parseHistoricalArgs(args []string) (pb.LogStream, uint64, uint64, uint32, uint64, error) {
+	stream := pb.LogStream_LOG_STREAM_BOTH
+	start := uint64(0)
+	end := uint64(0)
+	limit := uint32(0)
+	cursor := uint64(0)
+
+	index := 0
+	if len(args) > 0 {
+		if parsedStream, ok := parseLogStream(args[0]); ok {
+			stream = parsedStream
+			index = 1
+		}
+	}
+
+	remaining := args[index:]
+	if len(remaining) > 4 {
+		return stream, start, end, limit, cursor, fmt.Errorf("too many arguments")
+	}
+
+	var err error
+	if len(remaining) >= 1 {
+		start, err = parseUintArg(remaining[0])
+		if err != nil {
+			return stream, start, end, limit, cursor, err
+		}
+	}
+	if len(remaining) >= 2 {
+		end, err = parseUintArg(remaining[1])
+		if err != nil {
+			return stream, start, end, limit, cursor, err
+		}
+	}
+	if len(remaining) >= 3 {
+		parsedLimit, limitErr := strconv.ParseUint(remaining[2], 10, 32)
+		if limitErr != nil {
+			return stream, start, end, limit, cursor, limitErr
+		}
+		limit = uint32(parsedLimit)
+	}
+	if len(remaining) >= 4 {
+		cursor, err = parseUintArg(remaining[3])
+		if err != nil {
+			return stream, start, end, limit, cursor, err
+		}
+	}
+
+	return stream, start, end, limit, cursor, nil
+}
+
+func parseLogStream(raw string) (pb.LogStream, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "stdout", "out":
+		return pb.LogStream_LOG_STREAM_STDOUT, true
+	case "stderr", "err":
+		return pb.LogStream_LOG_STREAM_STDERR, true
+	case "both", "all":
+		return pb.LogStream_LOG_STREAM_BOTH, true
+	default:
+		return pb.LogStream_LOG_STREAM_UNSPECIFIED, false
+	}
 }
 
 func parseUintArg(raw string) (uint64, error) {

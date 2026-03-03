@@ -15,7 +15,7 @@ use once_cell::sync::Lazy;
 use rusqlite::{Connection, OptionalExtension, params};
 use tokio::sync::Mutex;
 
-use crate::definitions::LEDGER_PATH;
+use crate::{definitions::LEDGER_PATH, runtime_flags::runtime_flags};
 
 #[derive(Debug, Clone)]
 pub struct UsageSummary {
@@ -196,9 +196,19 @@ fn open_connection() -> Result<Connection, ErrorArrayItem> {
 }
 
 fn initialise_schema(conn: &Connection) -> Result<(), ErrorArrayItem> {
-    conn.execute_batch(
+    let journal_mode = if runtime_flags().ledger_awol {
+        log!(
+            LogLevel::Warn,
+            "Ledger AWOL mode active: WAL disabled (journal_mode=DELETE)"
+        );
+        "DELETE"
+    } else {
+        "WAL"
+    };
+
+    let schema = format!(
         r#"
-        PRAGMA journal_mode=WAL;
+        PRAGMA journal_mode={journal_mode};
         CREATE TABLE IF NOT EXISTS samples (
             app_name TEXT NOT NULL,
             ts INTEGER NOT NULL,
@@ -227,9 +237,10 @@ fn initialise_schema(conn: &Connection) -> Result<(), ErrorArrayItem> {
             updated_at INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (app_name, stream)
         );
-    "#,
-    )
-    .map_err(|err| {
+    "#
+    );
+
+    conn.execute_batch(&schema).map_err(|err| {
         ErrorArrayItem::new(
             Errors::GeneralError,
             format!("Failed to initialise usage ledger schema: {err}"),

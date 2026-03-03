@@ -21,6 +21,58 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type LogStream int32
+
+const (
+	LogStream_LOG_STREAM_UNSPECIFIED LogStream = 0
+	LogStream_LOG_STREAM_STDOUT      LogStream = 1
+	LogStream_LOG_STREAM_STDERR      LogStream = 2
+	LogStream_LOG_STREAM_BOTH        LogStream = 3
+)
+
+// Enum value maps for LogStream.
+var (
+	LogStream_name = map[int32]string{
+		0: "LOG_STREAM_UNSPECIFIED",
+		1: "LOG_STREAM_STDOUT",
+		2: "LOG_STREAM_STDERR",
+		3: "LOG_STREAM_BOTH",
+	}
+	LogStream_value = map[string]int32{
+		"LOG_STREAM_UNSPECIFIED": 0,
+		"LOG_STREAM_STDOUT":      1,
+		"LOG_STREAM_STDERR":      2,
+		"LOG_STREAM_BOTH":        3,
+	}
+)
+
+func (x LogStream) Enum() *LogStream {
+	p := new(LogStream)
+	*p = x
+	return p
+}
+
+func (x LogStream) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (LogStream) Descriptor() protoreflect.EnumDescriptor {
+	return file_watchdog_proto_enumTypes[0].Descriptor()
+}
+
+func (LogStream) Type() protoreflect.EnumType {
+	return &file_watchdog_proto_enumTypes[0]
+}
+
+func (x LogStream) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use LogStream.Descriptor instead.
+func (LogStream) EnumDescriptor() ([]byte, []int) {
+	return file_watchdog_proto_rawDescGZIP(), []int{0}
+}
+
 type BuildResult int32
 
 const (
@@ -54,11 +106,11 @@ func (x BuildResult) String() string {
 }
 
 func (BuildResult) Descriptor() protoreflect.EnumDescriptor {
-	return file_watchdog_proto_enumTypes[0].Descriptor()
+	return file_watchdog_proto_enumTypes[1].Descriptor()
 }
 
 func (BuildResult) Type() protoreflect.EnumType {
-	return &file_watchdog_proto_enumTypes[0]
+	return &file_watchdog_proto_enumTypes[1]
 }
 
 func (x BuildResult) Number() protoreflect.EnumNumber {
@@ -67,7 +119,7 @@ func (x BuildResult) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use BuildResult.Descriptor instead.
 func (BuildResult) EnumDescriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{0}
+	return file_watchdog_proto_rawDescGZIP(), []int{1}
 }
 
 type GetConfigField int32
@@ -127,11 +179,11 @@ func (x GetConfigField) String() string {
 }
 
 func (GetConfigField) Descriptor() protoreflect.EnumDescriptor {
-	return file_watchdog_proto_enumTypes[1].Descriptor()
+	return file_watchdog_proto_enumTypes[2].Descriptor()
 }
 
 func (GetConfigField) Type() protoreflect.EnumType {
-	return &file_watchdog_proto_enumTypes[1]
+	return &file_watchdog_proto_enumTypes[2]
 }
 
 func (x GetConfigField) Number() protoreflect.EnumNumber {
@@ -140,7 +192,7 @@ func (x GetConfigField) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use GetConfigField.Descriptor instead.
 func (GetConfigField) EnumDescriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{1}
+	return file_watchdog_proto_rawDescGZIP(), []int{2}
 }
 
 type Empty struct {
@@ -531,6 +583,570 @@ func (x *ApplicationStatusList) GetApplications() []*ApplicationStatusMessage {
 	return nil
 }
 
+type CurrentLogsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Application   string                 `protobuf:"bytes,1,opt,name=application,proto3" json:"application,omitempty"`
+	Limit         uint32                 `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CurrentLogsRequest) Reset() {
+	*x = CurrentLogsRequest{}
+	mi := &file_watchdog_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CurrentLogsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CurrentLogsRequest) ProtoMessage() {}
+
+func (x *CurrentLogsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_watchdog_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CurrentLogsRequest.ProtoReflect.Descriptor instead.
+func (*CurrentLogsRequest) Descriptor() ([]byte, []int) {
+	return file_watchdog_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *CurrentLogsRequest) GetApplication() string {
+	if x != nil {
+		return x.Application
+	}
+	return ""
+}
+
+func (x *CurrentLogsRequest) GetLimit() uint32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type CurrentLogsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	Application   string                 `protobuf:"bytes,2,opt,name=application,proto3" json:"application,omitempty"`
+	Stdout        []*StdLogEntry         `protobuf:"bytes,3,rep,name=stdout,proto3" json:"stdout,omitempty"`
+	Stderr        []*StdLogEntry         `protobuf:"bytes,4,rep,name=stderr,proto3" json:"stderr,omitempty"`
+	LastUpdated   uint64                 `protobuf:"varint,5,opt,name=last_updated,json=lastUpdated,proto3" json:"last_updated,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CurrentLogsResponse) Reset() {
+	*x = CurrentLogsResponse{}
+	mi := &file_watchdog_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CurrentLogsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CurrentLogsResponse) ProtoMessage() {}
+
+func (x *CurrentLogsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_watchdog_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CurrentLogsResponse.ProtoReflect.Descriptor instead.
+func (*CurrentLogsResponse) Descriptor() ([]byte, []int) {
+	return file_watchdog_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *CurrentLogsResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *CurrentLogsResponse) GetApplication() string {
+	if x != nil {
+		return x.Application
+	}
+	return ""
+}
+
+func (x *CurrentLogsResponse) GetStdout() []*StdLogEntry {
+	if x != nil {
+		return x.Stdout
+	}
+	return nil
+}
+
+func (x *CurrentLogsResponse) GetStderr() []*StdLogEntry {
+	if x != nil {
+		return x.Stderr
+	}
+	return nil
+}
+
+func (x *CurrentLogsResponse) GetLastUpdated() uint64 {
+	if x != nil {
+		return x.LastUpdated
+	}
+	return 0
+}
+
+type HistoricalLogsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Application   string                 `protobuf:"bytes,1,opt,name=application,proto3" json:"application,omitempty"`
+	Start         uint64                 `protobuf:"varint,2,opt,name=start,proto3" json:"start,omitempty"`
+	End           uint64                 `protobuf:"varint,3,opt,name=end,proto3" json:"end,omitempty"`
+	Stream        LogStream              `protobuf:"varint,4,opt,name=stream,proto3,enum=artisan.watchdog.LogStream" json:"stream,omitempty"`
+	Limit         uint32                 `protobuf:"varint,5,opt,name=limit,proto3" json:"limit,omitempty"`
+	Cursor        uint64                 `protobuf:"varint,6,opt,name=cursor,proto3" json:"cursor,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HistoricalLogsRequest) Reset() {
+	*x = HistoricalLogsRequest{}
+	mi := &file_watchdog_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HistoricalLogsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HistoricalLogsRequest) ProtoMessage() {}
+
+func (x *HistoricalLogsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_watchdog_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HistoricalLogsRequest.ProtoReflect.Descriptor instead.
+func (*HistoricalLogsRequest) Descriptor() ([]byte, []int) {
+	return file_watchdog_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *HistoricalLogsRequest) GetApplication() string {
+	if x != nil {
+		return x.Application
+	}
+	return ""
+}
+
+func (x *HistoricalLogsRequest) GetStart() uint64 {
+	if x != nil {
+		return x.Start
+	}
+	return 0
+}
+
+func (x *HistoricalLogsRequest) GetEnd() uint64 {
+	if x != nil {
+		return x.End
+	}
+	return 0
+}
+
+func (x *HistoricalLogsRequest) GetStream() LogStream {
+	if x != nil {
+		return x.Stream
+	}
+	return LogStream_LOG_STREAM_UNSPECIFIED
+}
+
+func (x *HistoricalLogsRequest) GetLimit() uint32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *HistoricalLogsRequest) GetCursor() uint64 {
+	if x != nil {
+		return x.Cursor
+	}
+	return 0
+}
+
+type HistoricalLogRecord struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Application   string                 `protobuf:"bytes,2,opt,name=application,proto3" json:"application,omitempty"`
+	Stream        LogStream              `protobuf:"varint,3,opt,name=stream,proto3,enum=artisan.watchdog.LogStream" json:"stream,omitempty"`
+	Timestamp     uint64                 `protobuf:"varint,4,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	Line          string                 `protobuf:"bytes,5,opt,name=line,proto3" json:"line,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HistoricalLogRecord) Reset() {
+	*x = HistoricalLogRecord{}
+	mi := &file_watchdog_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HistoricalLogRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HistoricalLogRecord) ProtoMessage() {}
+
+func (x *HistoricalLogRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_watchdog_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HistoricalLogRecord.ProtoReflect.Descriptor instead.
+func (*HistoricalLogRecord) Descriptor() ([]byte, []int) {
+	return file_watchdog_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *HistoricalLogRecord) GetId() uint64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *HistoricalLogRecord) GetApplication() string {
+	if x != nil {
+		return x.Application
+	}
+	return ""
+}
+
+func (x *HistoricalLogRecord) GetStream() LogStream {
+	if x != nil {
+		return x.Stream
+	}
+	return LogStream_LOG_STREAM_UNSPECIFIED
+}
+
+func (x *HistoricalLogRecord) GetTimestamp() uint64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *HistoricalLogRecord) GetLine() string {
+	if x != nil {
+		return x.Line
+	}
+	return ""
+}
+
+type HistoricalLogsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	Application   string                 `protobuf:"bytes,2,opt,name=application,proto3" json:"application,omitempty"`
+	Start         uint64                 `protobuf:"varint,3,opt,name=start,proto3" json:"start,omitempty"`
+	End           uint64                 `protobuf:"varint,4,opt,name=end,proto3" json:"end,omitempty"`
+	Stream        LogStream              `protobuf:"varint,5,opt,name=stream,proto3,enum=artisan.watchdog.LogStream" json:"stream,omitempty"`
+	Entries       []*HistoricalLogRecord `protobuf:"bytes,6,rep,name=entries,proto3" json:"entries,omitempty"`
+	NextCursor    uint64                 `protobuf:"varint,7,opt,name=next_cursor,json=nextCursor,proto3" json:"next_cursor,omitempty"`
+	HasMore       bool                   `protobuf:"varint,8,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HistoricalLogsResponse) Reset() {
+	*x = HistoricalLogsResponse{}
+	mi := &file_watchdog_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HistoricalLogsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HistoricalLogsResponse) ProtoMessage() {}
+
+func (x *HistoricalLogsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_watchdog_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HistoricalLogsResponse.ProtoReflect.Descriptor instead.
+func (*HistoricalLogsResponse) Descriptor() ([]byte, []int) {
+	return file_watchdog_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *HistoricalLogsResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *HistoricalLogsResponse) GetApplication() string {
+	if x != nil {
+		return x.Application
+	}
+	return ""
+}
+
+func (x *HistoricalLogsResponse) GetStart() uint64 {
+	if x != nil {
+		return x.Start
+	}
+	return 0
+}
+
+func (x *HistoricalLogsResponse) GetEnd() uint64 {
+	if x != nil {
+		return x.End
+	}
+	return 0
+}
+
+func (x *HistoricalLogsResponse) GetStream() LogStream {
+	if x != nil {
+		return x.Stream
+	}
+	return LogStream_LOG_STREAM_UNSPECIFIED
+}
+
+func (x *HistoricalLogsResponse) GetEntries() []*HistoricalLogRecord {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+func (x *HistoricalLogsResponse) GetNextCursor() uint64 {
+	if x != nil {
+		return x.NextCursor
+	}
+	return 0
+}
+
+func (x *HistoricalLogsResponse) GetHasMore() bool {
+	if x != nil {
+		return x.HasMore
+	}
+	return false
+}
+
+type UsageQueryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Application   string                 `protobuf:"bytes,1,opt,name=application,proto3" json:"application,omitempty"`
+	Start         uint64                 `protobuf:"varint,2,opt,name=start,proto3" json:"start,omitempty"`
+	End           uint64                 `protobuf:"varint,3,opt,name=end,proto3" json:"end,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UsageQueryRequest) Reset() {
+	*x = UsageQueryRequest{}
+	mi := &file_watchdog_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UsageQueryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UsageQueryRequest) ProtoMessage() {}
+
+func (x *UsageQueryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_watchdog_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UsageQueryRequest.ProtoReflect.Descriptor instead.
+func (*UsageQueryRequest) Descriptor() ([]byte, []int) {
+	return file_watchdog_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *UsageQueryRequest) GetApplication() string {
+	if x != nil {
+		return x.Application
+	}
+	return ""
+}
+
+func (x *UsageQueryRequest) GetStart() uint64 {
+	if x != nil {
+		return x.Start
+	}
+	return 0
+}
+
+func (x *UsageQueryRequest) GetEnd() uint64 {
+	if x != nil {
+		return x.End
+	}
+	return 0
+}
+
+type UsageQueryResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	Application   string                 `protobuf:"bytes,2,opt,name=application,proto3" json:"application,omitempty"`
+	Start         uint64                 `protobuf:"varint,3,opt,name=start,proto3" json:"start,omitempty"`
+	End           uint64                 `protobuf:"varint,4,opt,name=end,proto3" json:"end,omitempty"`
+	AvgCpu        float64                `protobuf:"fixed64,5,opt,name=avg_cpu,json=avgCpu,proto3" json:"avg_cpu,omitempty"`
+	PeakMem       float64                `protobuf:"fixed64,6,opt,name=peak_mem,json=peakMem,proto3" json:"peak_mem,omitempty"`
+	TotalRx       uint64                 `protobuf:"varint,7,opt,name=total_rx,json=totalRx,proto3" json:"total_rx,omitempty"`
+	TotalTx       uint64                 `protobuf:"varint,8,opt,name=total_tx,json=totalTx,proto3" json:"total_tx,omitempty"`
+	SampleCount   uint64                 `protobuf:"varint,9,opt,name=sample_count,json=sampleCount,proto3" json:"sample_count,omitempty"`
+	AvgMem        float64                `protobuf:"fixed64,10,opt,name=avg_mem,json=avgMem,proto3" json:"avg_mem,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UsageQueryResponse) Reset() {
+	*x = UsageQueryResponse{}
+	mi := &file_watchdog_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UsageQueryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UsageQueryResponse) ProtoMessage() {}
+
+func (x *UsageQueryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_watchdog_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UsageQueryResponse.ProtoReflect.Descriptor instead.
+func (*UsageQueryResponse) Descriptor() ([]byte, []int) {
+	return file_watchdog_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *UsageQueryResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *UsageQueryResponse) GetApplication() string {
+	if x != nil {
+		return x.Application
+	}
+	return ""
+}
+
+func (x *UsageQueryResponse) GetStart() uint64 {
+	if x != nil {
+		return x.Start
+	}
+	return 0
+}
+
+func (x *UsageQueryResponse) GetEnd() uint64 {
+	if x != nil {
+		return x.End
+	}
+	return 0
+}
+
+func (x *UsageQueryResponse) GetAvgCpu() float64 {
+	if x != nil {
+		return x.AvgCpu
+	}
+	return 0
+}
+
+func (x *UsageQueryResponse) GetPeakMem() float64 {
+	if x != nil {
+		return x.PeakMem
+	}
+	return 0
+}
+
+func (x *UsageQueryResponse) GetTotalRx() uint64 {
+	if x != nil {
+		return x.TotalRx
+	}
+	return 0
+}
+
+func (x *UsageQueryResponse) GetTotalTx() uint64 {
+	if x != nil {
+		return x.TotalTx
+	}
+	return 0
+}
+
+func (x *UsageQueryResponse) GetSampleCount() uint64 {
+	if x != nil {
+		return x.SampleCount
+	}
+	return 0
+}
+
+func (x *UsageQueryResponse) GetAvgMem() float64 {
+	if x != nil {
+		return x.AvgMem
+	}
+	return 0
+}
+
 type BuildStatusMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -543,7 +1159,7 @@ type BuildStatusMessage struct {
 
 func (x *BuildStatusMessage) Reset() {
 	*x = BuildStatusMessage{}
-	mi := &file_watchdog_proto_msgTypes[7]
+	mi := &file_watchdog_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -555,7 +1171,7 @@ func (x *BuildStatusMessage) String() string {
 func (*BuildStatusMessage) ProtoMessage() {}
 
 func (x *BuildStatusMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[7]
+	mi := &file_watchdog_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -568,7 +1184,7 @@ func (x *BuildStatusMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildStatusMessage.ProtoReflect.Descriptor instead.
 func (*BuildStatusMessage) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{7}
+	return file_watchdog_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *BuildStatusMessage) GetName() string {
@@ -608,7 +1224,7 @@ type BuildStatusList struct {
 
 func (x *BuildStatusList) Reset() {
 	*x = BuildStatusList{}
-	mi := &file_watchdog_proto_msgTypes[8]
+	mi := &file_watchdog_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -620,7 +1236,7 @@ func (x *BuildStatusList) String() string {
 func (*BuildStatusList) ProtoMessage() {}
 
 func (x *BuildStatusList) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[8]
+	mi := &file_watchdog_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -633,7 +1249,7 @@ func (x *BuildStatusList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildStatusList.ProtoReflect.Descriptor instead.
 func (*BuildStatusList) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{8}
+	return file_watchdog_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *BuildStatusList) GetBuilds() []*BuildStatusMessage {
@@ -657,7 +1273,7 @@ type VerificationEntryMessage struct {
 
 func (x *VerificationEntryMessage) Reset() {
 	*x = VerificationEntryMessage{}
-	mi := &file_watchdog_proto_msgTypes[9]
+	mi := &file_watchdog_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -669,7 +1285,7 @@ func (x *VerificationEntryMessage) String() string {
 func (*VerificationEntryMessage) ProtoMessage() {}
 
 func (x *VerificationEntryMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[9]
+	mi := &file_watchdog_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -682,7 +1298,7 @@ func (x *VerificationEntryMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerificationEntryMessage.ProtoReflect.Descriptor instead.
 func (*VerificationEntryMessage) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{9}
+	return file_watchdog_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *VerificationEntryMessage) GetName() string {
@@ -736,7 +1352,7 @@ type VerificationEntryList struct {
 
 func (x *VerificationEntryList) Reset() {
 	*x = VerificationEntryList{}
-	mi := &file_watchdog_proto_msgTypes[10]
+	mi := &file_watchdog_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -748,7 +1364,7 @@ func (x *VerificationEntryList) String() string {
 func (*VerificationEntryList) ProtoMessage() {}
 
 func (x *VerificationEntryList) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[10]
+	mi := &file_watchdog_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -761,7 +1377,7 @@ func (x *VerificationEntryList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VerificationEntryList.ProtoReflect.Descriptor instead.
 func (*VerificationEntryList) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{10}
+	return file_watchdog_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *VerificationEntryList) GetEntries() []*VerificationEntryMessage {
@@ -786,7 +1402,7 @@ type SystemInfo struct {
 
 func (x *SystemInfo) Reset() {
 	*x = SystemInfo{}
-	mi := &file_watchdog_proto_msgTypes[11]
+	mi := &file_watchdog_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -798,7 +1414,7 @@ func (x *SystemInfo) String() string {
 func (*SystemInfo) ProtoMessage() {}
 
 func (x *SystemInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[11]
+	mi := &file_watchdog_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -811,7 +1427,7 @@ func (x *SystemInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SystemInfo.ProtoReflect.Descriptor instead.
 func (*SystemInfo) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{11}
+	return file_watchdog_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SystemInfo) GetIdentity() string {
@@ -874,7 +1490,7 @@ type SecurityTripStatus struct {
 
 func (x *SecurityTripStatus) Reset() {
 	*x = SecurityTripStatus{}
-	mi := &file_watchdog_proto_msgTypes[12]
+	mi := &file_watchdog_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -886,7 +1502,7 @@ func (x *SecurityTripStatus) String() string {
 func (*SecurityTripStatus) ProtoMessage() {}
 
 func (x *SecurityTripStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[12]
+	mi := &file_watchdog_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -899,7 +1515,7 @@ func (x *SecurityTripStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SecurityTripStatus.ProtoReflect.Descriptor instead.
 func (*SecurityTripStatus) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{12}
+	return file_watchdog_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *SecurityTripStatus) GetTripped() bool {
@@ -933,7 +1549,7 @@ type VersionInfo struct {
 
 func (x *VersionInfo) Reset() {
 	*x = VersionInfo{}
-	mi := &file_watchdog_proto_msgTypes[13]
+	mi := &file_watchdog_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -945,7 +1561,7 @@ func (x *VersionInfo) String() string {
 func (*VersionInfo) ProtoMessage() {}
 
 func (x *VersionInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[13]
+	mi := &file_watchdog_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -958,7 +1574,7 @@ func (x *VersionInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VersionInfo.ProtoReflect.Descriptor instead.
 func (*VersionInfo) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{13}
+	return file_watchdog_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *VersionInfo) GetWatchdogVersion() string {
@@ -996,7 +1612,7 @@ type SetConfigValue struct {
 
 func (x *SetConfigValue) Reset() {
 	*x = SetConfigValue{}
-	mi := &file_watchdog_proto_msgTypes[14]
+	mi := &file_watchdog_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1008,7 +1624,7 @@ func (x *SetConfigValue) String() string {
 func (*SetConfigValue) ProtoMessage() {}
 
 func (x *SetConfigValue) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[14]
+	mi := &file_watchdog_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1021,7 +1637,7 @@ func (x *SetConfigValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetConfigValue.ProtoReflect.Descriptor instead.
 func (*SetConfigValue) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{14}
+	return file_watchdog_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SetConfigValue) GetValue() isSetConfigValue_Value {
@@ -1194,7 +1810,7 @@ type StartCommand struct {
 
 func (x *StartCommand) Reset() {
 	*x = StartCommand{}
-	mi := &file_watchdog_proto_msgTypes[15]
+	mi := &file_watchdog_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1206,7 +1822,7 @@ func (x *StartCommand) String() string {
 func (*StartCommand) ProtoMessage() {}
 
 func (x *StartCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[15]
+	mi := &file_watchdog_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1219,7 +1835,7 @@ func (x *StartCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartCommand.ProtoReflect.Descriptor instead.
 func (*StartCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{15}
+	return file_watchdog_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *StartCommand) GetApplication() string {
@@ -1238,7 +1854,7 @@ type StopCommand struct {
 
 func (x *StopCommand) Reset() {
 	*x = StopCommand{}
-	mi := &file_watchdog_proto_msgTypes[16]
+	mi := &file_watchdog_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1250,7 +1866,7 @@ func (x *StopCommand) String() string {
 func (*StopCommand) ProtoMessage() {}
 
 func (x *StopCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[16]
+	mi := &file_watchdog_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1263,7 +1879,7 @@ func (x *StopCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopCommand.ProtoReflect.Descriptor instead.
 func (*StopCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{16}
+	return file_watchdog_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *StopCommand) GetApplication() string {
@@ -1282,7 +1898,7 @@ type ReloadCommand struct {
 
 func (x *ReloadCommand) Reset() {
 	*x = ReloadCommand{}
-	mi := &file_watchdog_proto_msgTypes[17]
+	mi := &file_watchdog_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1294,7 +1910,7 @@ func (x *ReloadCommand) String() string {
 func (*ReloadCommand) ProtoMessage() {}
 
 func (x *ReloadCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[17]
+	mi := &file_watchdog_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1307,7 +1923,7 @@ func (x *ReloadCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadCommand.ProtoReflect.Descriptor instead.
 func (*ReloadCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{17}
+	return file_watchdog_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ReloadCommand) GetApplication() string {
@@ -1326,7 +1942,7 @@ type RebuildCommand struct {
 
 func (x *RebuildCommand) Reset() {
 	*x = RebuildCommand{}
-	mi := &file_watchdog_proto_msgTypes[18]
+	mi := &file_watchdog_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1338,7 +1954,7 @@ func (x *RebuildCommand) String() string {
 func (*RebuildCommand) ProtoMessage() {}
 
 func (x *RebuildCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[18]
+	mi := &file_watchdog_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1351,7 +1967,7 @@ func (x *RebuildCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RebuildCommand.ProtoReflect.Descriptor instead.
 func (*RebuildCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{18}
+	return file_watchdog_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *RebuildCommand) GetApplication() string {
@@ -1370,7 +1986,7 @@ type StatusCommand struct {
 
 func (x *StatusCommand) Reset() {
 	*x = StatusCommand{}
-	mi := &file_watchdog_proto_msgTypes[19]
+	mi := &file_watchdog_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1382,7 +1998,7 @@ func (x *StatusCommand) String() string {
 func (*StatusCommand) ProtoMessage() {}
 
 func (x *StatusCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[19]
+	mi := &file_watchdog_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1395,7 +2011,7 @@ func (x *StatusCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StatusCommand.ProtoReflect.Descriptor instead.
 func (*StatusCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{19}
+	return file_watchdog_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *StatusCommand) GetApplication() string {
@@ -1413,7 +2029,7 @@ type InfoCommand struct {
 
 func (x *InfoCommand) Reset() {
 	*x = InfoCommand{}
-	mi := &file_watchdog_proto_msgTypes[20]
+	mi := &file_watchdog_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1425,7 +2041,7 @@ func (x *InfoCommand) String() string {
 func (*InfoCommand) ProtoMessage() {}
 
 func (x *InfoCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[20]
+	mi := &file_watchdog_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1438,7 +2054,7 @@ func (x *InfoCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InfoCommand.ProtoReflect.Descriptor instead.
 func (*InfoCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{20}
+	return file_watchdog_proto_rawDescGZIP(), []int{27}
 }
 
 type SetCommand struct {
@@ -1451,7 +2067,7 @@ type SetCommand struct {
 
 func (x *SetCommand) Reset() {
 	*x = SetCommand{}
-	mi := &file_watchdog_proto_msgTypes[21]
+	mi := &file_watchdog_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1463,7 +2079,7 @@ func (x *SetCommand) String() string {
 func (*SetCommand) ProtoMessage() {}
 
 func (x *SetCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[21]
+	mi := &file_watchdog_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1476,7 +2092,7 @@ func (x *SetCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetCommand.ProtoReflect.Descriptor instead.
 func (*SetCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{21}
+	return file_watchdog_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *SetCommand) GetApplication() string {
@@ -1503,7 +2119,7 @@ type GetCommand struct {
 
 func (x *GetCommand) Reset() {
 	*x = GetCommand{}
-	mi := &file_watchdog_proto_msgTypes[22]
+	mi := &file_watchdog_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1515,7 +2131,7 @@ func (x *GetCommand) String() string {
 func (*GetCommand) ProtoMessage() {}
 
 func (x *GetCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[22]
+	mi := &file_watchdog_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1528,7 +2144,7 @@ func (x *GetCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCommand.ProtoReflect.Descriptor instead.
 func (*GetCommand) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{22}
+	return file_watchdog_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetCommand) GetApplication() string {
@@ -1564,7 +2180,7 @@ type CommandRequest struct {
 
 func (x *CommandRequest) Reset() {
 	*x = CommandRequest{}
-	mi := &file_watchdog_proto_msgTypes[23]
+	mi := &file_watchdog_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1576,7 +2192,7 @@ func (x *CommandRequest) String() string {
 func (*CommandRequest) ProtoMessage() {}
 
 func (x *CommandRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[23]
+	mi := &file_watchdog_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1589,7 +2205,7 @@ func (x *CommandRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandRequest.ProtoReflect.Descriptor instead.
 func (*CommandRequest) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{23}
+	return file_watchdog_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *CommandRequest) GetPayload() isCommandRequest_Payload {
@@ -1733,7 +2349,7 @@ type CommandResponse struct {
 
 func (x *CommandResponse) Reset() {
 	*x = CommandResponse{}
-	mi := &file_watchdog_proto_msgTypes[24]
+	mi := &file_watchdog_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1745,7 +2361,7 @@ func (x *CommandResponse) String() string {
 func (*CommandResponse) ProtoMessage() {}
 
 func (x *CommandResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_watchdog_proto_msgTypes[24]
+	mi := &file_watchdog_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1758,7 +2374,7 @@ func (x *CommandResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandResponse.ProtoReflect.Descriptor instead.
 func (*CommandResponse) Descriptor() ([]byte, []int) {
-	return file_watchdog_proto_rawDescGZIP(), []int{24}
+	return file_watchdog_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *CommandResponse) GetAccepted() bool {
@@ -1804,7 +2420,55 @@ const file_watchdog_proto_rawDesc = "" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12B\n" +
 	"\x06status\x18\x02 \x01(\v2*.artisan.watchdog.ApplicationStatusMessageR\x06status\"g\n" +
 	"\x15ApplicationStatusList\x12N\n" +
-	"\fapplications\x18\x01 \x03(\v2*.artisan.watchdog.ApplicationStatusMessageR\fapplications\"\x95\x01\n" +
+	"\fapplications\x18\x01 \x03(\v2*.artisan.watchdog.ApplicationStatusMessageR\fapplications\"L\n" +
+	"\x12CurrentLogsRequest\x12 \n" +
+	"\vapplication\x18\x01 \x01(\tR\vapplication\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\rR\x05limit\"\xde\x01\n" +
+	"\x13CurrentLogsResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x12 \n" +
+	"\vapplication\x18\x02 \x01(\tR\vapplication\x125\n" +
+	"\x06stdout\x18\x03 \x03(\v2\x1d.artisan.watchdog.StdLogEntryR\x06stdout\x125\n" +
+	"\x06stderr\x18\x04 \x03(\v2\x1d.artisan.watchdog.StdLogEntryR\x06stderr\x12!\n" +
+	"\flast_updated\x18\x05 \x01(\x04R\vlastUpdated\"\xc4\x01\n" +
+	"\x15HistoricalLogsRequest\x12 \n" +
+	"\vapplication\x18\x01 \x01(\tR\vapplication\x12\x14\n" +
+	"\x05start\x18\x02 \x01(\x04R\x05start\x12\x10\n" +
+	"\x03end\x18\x03 \x01(\x04R\x03end\x123\n" +
+	"\x06stream\x18\x04 \x01(\x0e2\x1b.artisan.watchdog.LogStreamR\x06stream\x12\x14\n" +
+	"\x05limit\x18\x05 \x01(\rR\x05limit\x12\x16\n" +
+	"\x06cursor\x18\x06 \x01(\x04R\x06cursor\"\xae\x01\n" +
+	"\x13HistoricalLogRecord\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x04R\x02id\x12 \n" +
+	"\vapplication\x18\x02 \x01(\tR\vapplication\x123\n" +
+	"\x06stream\x18\x03 \x01(\x0e2\x1b.artisan.watchdog.LogStreamR\x06stream\x12\x1c\n" +
+	"\ttimestamp\x18\x04 \x01(\x04R\ttimestamp\x12\x12\n" +
+	"\x04line\x18\x05 \x01(\tR\x04line\"\xaa\x02\n" +
+	"\x16HistoricalLogsResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x12 \n" +
+	"\vapplication\x18\x02 \x01(\tR\vapplication\x12\x14\n" +
+	"\x05start\x18\x03 \x01(\x04R\x05start\x12\x10\n" +
+	"\x03end\x18\x04 \x01(\x04R\x03end\x123\n" +
+	"\x06stream\x18\x05 \x01(\x0e2\x1b.artisan.watchdog.LogStreamR\x06stream\x12?\n" +
+	"\aentries\x18\x06 \x03(\v2%.artisan.watchdog.HistoricalLogRecordR\aentries\x12\x1f\n" +
+	"\vnext_cursor\x18\a \x01(\x04R\n" +
+	"nextCursor\x12\x19\n" +
+	"\bhas_more\x18\b \x01(\bR\ahasMore\"]\n" +
+	"\x11UsageQueryRequest\x12 \n" +
+	"\vapplication\x18\x01 \x01(\tR\vapplication\x12\x14\n" +
+	"\x05start\x18\x02 \x01(\x04R\x05start\x12\x10\n" +
+	"\x03end\x18\x03 \x01(\x04R\x03end\"\x9a\x02\n" +
+	"\x12UsageQueryResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x12 \n" +
+	"\vapplication\x18\x02 \x01(\tR\vapplication\x12\x14\n" +
+	"\x05start\x18\x03 \x01(\x04R\x05start\x12\x10\n" +
+	"\x03end\x18\x04 \x01(\x04R\x03end\x12\x17\n" +
+	"\aavg_cpu\x18\x05 \x01(\x01R\x06avgCpu\x12\x19\n" +
+	"\bpeak_mem\x18\x06 \x01(\x01R\apeakMem\x12\x19\n" +
+	"\btotal_rx\x18\a \x01(\x04R\atotalRx\x12\x19\n" +
+	"\btotal_tx\x18\b \x01(\x04R\atotalTx\x12!\n" +
+	"\fsample_count\x18\t \x01(\x04R\vsampleCount\x12\x17\n" +
+	"\aavg_mem\x18\n" +
+	" \x01(\x01R\x06avgMem\"\x95\x01\n" +
 	"\x12BuildStatusMessage\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x125\n" +
 	"\x06result\x18\x02 \x01(\x0e2\x1d.artisan.watchdog.BuildResultR\x06result\x12\x1c\n" +
@@ -1884,7 +2548,12 @@ const file_watchdog_proto_rawDesc = "" +
 	"\apayload\"G\n" +
 	"\x0fCommandResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage*_\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage*j\n" +
+	"\tLogStream\x12\x1a\n" +
+	"\x16LOG_STREAM_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x11LOG_STREAM_STDOUT\x10\x01\x12\x15\n" +
+	"\x11LOG_STREAM_STDERR\x10\x02\x12\x13\n" +
+	"\x0fLOG_STREAM_BOTH\x10\x03*_\n" +
 	"\vBuildResult\x12\x1c\n" +
 	"\x18BUILD_RESULT_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14BUILD_RESULT_SUCCESS\x10\x01\x12\x18\n" +
@@ -1901,17 +2570,21 @@ const file_watchdog_proto_rawDesc = "" +
 	"\"GET_CONFIG_FIELD_WORKING_DIRECTORY\x10\b\x12#\n" +
 	"\x1fGET_CONFIG_FIELD_CHANGES_NEEDED\x10\t\x12&\n" +
 	"\"GET_CONFIG_FIELD_DIR_SCAN_INTERVAL\x10\n" +
-	"2\xad\x05\n" +
+	"2\xcf\a\n" +
 	"\bWatchdog\x12T\n" +
 	"\x10ListApplications\x12\x17.artisan.watchdog.Empty\x1a'.artisan.watchdog.ApplicationStatusList\x12i\n" +
-	"\x0eGetApplication\x12*.artisan.watchdog.ApplicationStatusRequest\x1a+.artisan.watchdog.ApplicationStatusResponse\x12H\n" +
+	"\x0eGetApplication\x12*.artisan.watchdog.ApplicationStatusRequest\x1a+.artisan.watchdog.ApplicationStatusResponse\x12]\n" +
+	"\x0eGetCurrentLogs\x12$.artisan.watchdog.CurrentLogsRequest\x1a%.artisan.watchdog.CurrentLogsResponse\x12h\n" +
+	"\x13QueryHistoricalLogs\x12'.artisan.watchdog.HistoricalLogsRequest\x1a(.artisan.watchdog.HistoricalLogsResponse\x12H\n" +
 	"\n" +
 	"ListBuilds\x12\x17.artisan.watchdog.Empty\x1a!.artisan.watchdog.BuildStatusList\x12U\n" +
 	"\x11ListVerifications\x12\x17.artisan.watchdog.Empty\x1a'.artisan.watchdog.VerificationEntryList\x12F\n" +
 	"\rGetSystemInfo\x12\x17.artisan.watchdog.Empty\x1a\x1c.artisan.watchdog.SystemInfo\x12V\n" +
 	"\x15GetSecurityTripStatus\x12\x17.artisan.watchdog.Empty\x1a$.artisan.watchdog.SecurityTripStatus\x12H\n" +
 	"\x0eGetVersionInfo\x12\x17.artisan.watchdog.Empty\x1a\x1d.artisan.watchdog.VersionInfo\x12U\n" +
-	"\x0eExecuteCommand\x12 .artisan.watchdog.CommandRequest\x1a!.artisan.watchdog.CommandResponseB\x1bZ\x19artisan/watchdog;watchdogb\x06proto3"
+	"\x0eExecuteCommand\x12 .artisan.watchdog.CommandRequest\x1a!.artisan.watchdog.CommandResponse\x12W\n" +
+	"\n" +
+	"QueryUsage\x12#.artisan.watchdog.UsageQueryRequest\x1a$.artisan.watchdog.UsageQueryResponseB\x1bZ\x19artisan/watchdog;watchdogb\x06proto3"
 
 var (
 	file_watchdog_proto_rawDescOnce sync.Once
@@ -1925,77 +2598,97 @@ func file_watchdog_proto_rawDescGZIP() []byte {
 	return file_watchdog_proto_rawDescData
 }
 
-var file_watchdog_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_watchdog_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_watchdog_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_watchdog_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_watchdog_proto_goTypes = []any{
-	(BuildResult)(0),                  // 0: artisan.watchdog.BuildResult
-	(GetConfigField)(0),               // 1: artisan.watchdog.GetConfigField
-	(*Empty)(nil),                     // 2: artisan.watchdog.Empty
-	(*StdLogEntry)(nil),               // 3: artisan.watchdog.StdLogEntry
-	(*NetworkUsageMessage)(nil),       // 4: artisan.watchdog.NetworkUsageMessage
-	(*ApplicationStatusMessage)(nil),  // 5: artisan.watchdog.ApplicationStatusMessage
-	(*ApplicationStatusRequest)(nil),  // 6: artisan.watchdog.ApplicationStatusRequest
-	(*ApplicationStatusResponse)(nil), // 7: artisan.watchdog.ApplicationStatusResponse
-	(*ApplicationStatusList)(nil),     // 8: artisan.watchdog.ApplicationStatusList
-	(*BuildStatusMessage)(nil),        // 9: artisan.watchdog.BuildStatusMessage
-	(*BuildStatusList)(nil),           // 10: artisan.watchdog.BuildStatusList
-	(*VerificationEntryMessage)(nil),  // 11: artisan.watchdog.VerificationEntryMessage
-	(*VerificationEntryList)(nil),     // 12: artisan.watchdog.VerificationEntryList
-	(*SystemInfo)(nil),                // 13: artisan.watchdog.SystemInfo
-	(*SecurityTripStatus)(nil),        // 14: artisan.watchdog.SecurityTripStatus
-	(*VersionInfo)(nil),               // 15: artisan.watchdog.VersionInfo
-	(*SetConfigValue)(nil),            // 16: artisan.watchdog.SetConfigValue
-	(*StartCommand)(nil),              // 17: artisan.watchdog.StartCommand
-	(*StopCommand)(nil),               // 18: artisan.watchdog.StopCommand
-	(*ReloadCommand)(nil),             // 19: artisan.watchdog.ReloadCommand
-	(*RebuildCommand)(nil),            // 20: artisan.watchdog.RebuildCommand
-	(*StatusCommand)(nil),             // 21: artisan.watchdog.StatusCommand
-	(*InfoCommand)(nil),               // 22: artisan.watchdog.InfoCommand
-	(*SetCommand)(nil),                // 23: artisan.watchdog.SetCommand
-	(*GetCommand)(nil),                // 24: artisan.watchdog.GetCommand
-	(*CommandRequest)(nil),            // 25: artisan.watchdog.CommandRequest
-	(*CommandResponse)(nil),           // 26: artisan.watchdog.CommandResponse
+	(LogStream)(0),                    // 0: artisan.watchdog.LogStream
+	(BuildResult)(0),                  // 1: artisan.watchdog.BuildResult
+	(GetConfigField)(0),               // 2: artisan.watchdog.GetConfigField
+	(*Empty)(nil),                     // 3: artisan.watchdog.Empty
+	(*StdLogEntry)(nil),               // 4: artisan.watchdog.StdLogEntry
+	(*NetworkUsageMessage)(nil),       // 5: artisan.watchdog.NetworkUsageMessage
+	(*ApplicationStatusMessage)(nil),  // 6: artisan.watchdog.ApplicationStatusMessage
+	(*ApplicationStatusRequest)(nil),  // 7: artisan.watchdog.ApplicationStatusRequest
+	(*ApplicationStatusResponse)(nil), // 8: artisan.watchdog.ApplicationStatusResponse
+	(*ApplicationStatusList)(nil),     // 9: artisan.watchdog.ApplicationStatusList
+	(*CurrentLogsRequest)(nil),        // 10: artisan.watchdog.CurrentLogsRequest
+	(*CurrentLogsResponse)(nil),       // 11: artisan.watchdog.CurrentLogsResponse
+	(*HistoricalLogsRequest)(nil),     // 12: artisan.watchdog.HistoricalLogsRequest
+	(*HistoricalLogRecord)(nil),       // 13: artisan.watchdog.HistoricalLogRecord
+	(*HistoricalLogsResponse)(nil),    // 14: artisan.watchdog.HistoricalLogsResponse
+	(*UsageQueryRequest)(nil),         // 15: artisan.watchdog.UsageQueryRequest
+	(*UsageQueryResponse)(nil),        // 16: artisan.watchdog.UsageQueryResponse
+	(*BuildStatusMessage)(nil),        // 17: artisan.watchdog.BuildStatusMessage
+	(*BuildStatusList)(nil),           // 18: artisan.watchdog.BuildStatusList
+	(*VerificationEntryMessage)(nil),  // 19: artisan.watchdog.VerificationEntryMessage
+	(*VerificationEntryList)(nil),     // 20: artisan.watchdog.VerificationEntryList
+	(*SystemInfo)(nil),                // 21: artisan.watchdog.SystemInfo
+	(*SecurityTripStatus)(nil),        // 22: artisan.watchdog.SecurityTripStatus
+	(*VersionInfo)(nil),               // 23: artisan.watchdog.VersionInfo
+	(*SetConfigValue)(nil),            // 24: artisan.watchdog.SetConfigValue
+	(*StartCommand)(nil),              // 25: artisan.watchdog.StartCommand
+	(*StopCommand)(nil),               // 26: artisan.watchdog.StopCommand
+	(*ReloadCommand)(nil),             // 27: artisan.watchdog.ReloadCommand
+	(*RebuildCommand)(nil),            // 28: artisan.watchdog.RebuildCommand
+	(*StatusCommand)(nil),             // 29: artisan.watchdog.StatusCommand
+	(*InfoCommand)(nil),               // 30: artisan.watchdog.InfoCommand
+	(*SetCommand)(nil),                // 31: artisan.watchdog.SetCommand
+	(*GetCommand)(nil),                // 32: artisan.watchdog.GetCommand
+	(*CommandRequest)(nil),            // 33: artisan.watchdog.CommandRequest
+	(*CommandResponse)(nil),           // 34: artisan.watchdog.CommandResponse
 }
 var file_watchdog_proto_depIdxs = []int32{
-	3,  // 0: artisan.watchdog.ApplicationStatusMessage.stdout:type_name -> artisan.watchdog.StdLogEntry
-	3,  // 1: artisan.watchdog.ApplicationStatusMessage.stderr:type_name -> artisan.watchdog.StdLogEntry
-	4,  // 2: artisan.watchdog.ApplicationStatusMessage.network_usage:type_name -> artisan.watchdog.NetworkUsageMessage
-	5,  // 3: artisan.watchdog.ApplicationStatusResponse.status:type_name -> artisan.watchdog.ApplicationStatusMessage
-	5,  // 4: artisan.watchdog.ApplicationStatusList.applications:type_name -> artisan.watchdog.ApplicationStatusMessage
-	0,  // 5: artisan.watchdog.BuildStatusMessage.result:type_name -> artisan.watchdog.BuildResult
-	9,  // 6: artisan.watchdog.BuildStatusList.builds:type_name -> artisan.watchdog.BuildStatusMessage
-	11, // 7: artisan.watchdog.VerificationEntryList.entries:type_name -> artisan.watchdog.VerificationEntryMessage
-	16, // 8: artisan.watchdog.SetCommand.value:type_name -> artisan.watchdog.SetConfigValue
-	1,  // 9: artisan.watchdog.GetCommand.field:type_name -> artisan.watchdog.GetConfigField
-	17, // 10: artisan.watchdog.CommandRequest.start:type_name -> artisan.watchdog.StartCommand
-	18, // 11: artisan.watchdog.CommandRequest.stop:type_name -> artisan.watchdog.StopCommand
-	19, // 12: artisan.watchdog.CommandRequest.reload:type_name -> artisan.watchdog.ReloadCommand
-	20, // 13: artisan.watchdog.CommandRequest.rebuild:type_name -> artisan.watchdog.RebuildCommand
-	21, // 14: artisan.watchdog.CommandRequest.status:type_name -> artisan.watchdog.StatusCommand
-	22, // 15: artisan.watchdog.CommandRequest.info:type_name -> artisan.watchdog.InfoCommand
-	23, // 16: artisan.watchdog.CommandRequest.set:type_name -> artisan.watchdog.SetCommand
-	24, // 17: artisan.watchdog.CommandRequest.get:type_name -> artisan.watchdog.GetCommand
-	2,  // 18: artisan.watchdog.Watchdog.ListApplications:input_type -> artisan.watchdog.Empty
-	6,  // 19: artisan.watchdog.Watchdog.GetApplication:input_type -> artisan.watchdog.ApplicationStatusRequest
-	2,  // 20: artisan.watchdog.Watchdog.ListBuilds:input_type -> artisan.watchdog.Empty
-	2,  // 21: artisan.watchdog.Watchdog.ListVerifications:input_type -> artisan.watchdog.Empty
-	2,  // 22: artisan.watchdog.Watchdog.GetSystemInfo:input_type -> artisan.watchdog.Empty
-	2,  // 23: artisan.watchdog.Watchdog.GetSecurityTripStatus:input_type -> artisan.watchdog.Empty
-	2,  // 24: artisan.watchdog.Watchdog.GetVersionInfo:input_type -> artisan.watchdog.Empty
-	25, // 25: artisan.watchdog.Watchdog.ExecuteCommand:input_type -> artisan.watchdog.CommandRequest
-	8,  // 26: artisan.watchdog.Watchdog.ListApplications:output_type -> artisan.watchdog.ApplicationStatusList
-	7,  // 27: artisan.watchdog.Watchdog.GetApplication:output_type -> artisan.watchdog.ApplicationStatusResponse
-	10, // 28: artisan.watchdog.Watchdog.ListBuilds:output_type -> artisan.watchdog.BuildStatusList
-	12, // 29: artisan.watchdog.Watchdog.ListVerifications:output_type -> artisan.watchdog.VerificationEntryList
-	13, // 30: artisan.watchdog.Watchdog.GetSystemInfo:output_type -> artisan.watchdog.SystemInfo
-	14, // 31: artisan.watchdog.Watchdog.GetSecurityTripStatus:output_type -> artisan.watchdog.SecurityTripStatus
-	15, // 32: artisan.watchdog.Watchdog.GetVersionInfo:output_type -> artisan.watchdog.VersionInfo
-	26, // 33: artisan.watchdog.Watchdog.ExecuteCommand:output_type -> artisan.watchdog.CommandResponse
-	26, // [26:34] is the sub-list for method output_type
-	18, // [18:26] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	4,  // 0: artisan.watchdog.ApplicationStatusMessage.stdout:type_name -> artisan.watchdog.StdLogEntry
+	4,  // 1: artisan.watchdog.ApplicationStatusMessage.stderr:type_name -> artisan.watchdog.StdLogEntry
+	5,  // 2: artisan.watchdog.ApplicationStatusMessage.network_usage:type_name -> artisan.watchdog.NetworkUsageMessage
+	6,  // 3: artisan.watchdog.ApplicationStatusResponse.status:type_name -> artisan.watchdog.ApplicationStatusMessage
+	6,  // 4: artisan.watchdog.ApplicationStatusList.applications:type_name -> artisan.watchdog.ApplicationStatusMessage
+	4,  // 5: artisan.watchdog.CurrentLogsResponse.stdout:type_name -> artisan.watchdog.StdLogEntry
+	4,  // 6: artisan.watchdog.CurrentLogsResponse.stderr:type_name -> artisan.watchdog.StdLogEntry
+	0,  // 7: artisan.watchdog.HistoricalLogsRequest.stream:type_name -> artisan.watchdog.LogStream
+	0,  // 8: artisan.watchdog.HistoricalLogRecord.stream:type_name -> artisan.watchdog.LogStream
+	0,  // 9: artisan.watchdog.HistoricalLogsResponse.stream:type_name -> artisan.watchdog.LogStream
+	13, // 10: artisan.watchdog.HistoricalLogsResponse.entries:type_name -> artisan.watchdog.HistoricalLogRecord
+	1,  // 11: artisan.watchdog.BuildStatusMessage.result:type_name -> artisan.watchdog.BuildResult
+	17, // 12: artisan.watchdog.BuildStatusList.builds:type_name -> artisan.watchdog.BuildStatusMessage
+	19, // 13: artisan.watchdog.VerificationEntryList.entries:type_name -> artisan.watchdog.VerificationEntryMessage
+	24, // 14: artisan.watchdog.SetCommand.value:type_name -> artisan.watchdog.SetConfigValue
+	2,  // 15: artisan.watchdog.GetCommand.field:type_name -> artisan.watchdog.GetConfigField
+	25, // 16: artisan.watchdog.CommandRequest.start:type_name -> artisan.watchdog.StartCommand
+	26, // 17: artisan.watchdog.CommandRequest.stop:type_name -> artisan.watchdog.StopCommand
+	27, // 18: artisan.watchdog.CommandRequest.reload:type_name -> artisan.watchdog.ReloadCommand
+	28, // 19: artisan.watchdog.CommandRequest.rebuild:type_name -> artisan.watchdog.RebuildCommand
+	29, // 20: artisan.watchdog.CommandRequest.status:type_name -> artisan.watchdog.StatusCommand
+	30, // 21: artisan.watchdog.CommandRequest.info:type_name -> artisan.watchdog.InfoCommand
+	31, // 22: artisan.watchdog.CommandRequest.set:type_name -> artisan.watchdog.SetCommand
+	32, // 23: artisan.watchdog.CommandRequest.get:type_name -> artisan.watchdog.GetCommand
+	3,  // 24: artisan.watchdog.Watchdog.ListApplications:input_type -> artisan.watchdog.Empty
+	7,  // 25: artisan.watchdog.Watchdog.GetApplication:input_type -> artisan.watchdog.ApplicationStatusRequest
+	10, // 26: artisan.watchdog.Watchdog.GetCurrentLogs:input_type -> artisan.watchdog.CurrentLogsRequest
+	12, // 27: artisan.watchdog.Watchdog.QueryHistoricalLogs:input_type -> artisan.watchdog.HistoricalLogsRequest
+	3,  // 28: artisan.watchdog.Watchdog.ListBuilds:input_type -> artisan.watchdog.Empty
+	3,  // 29: artisan.watchdog.Watchdog.ListVerifications:input_type -> artisan.watchdog.Empty
+	3,  // 30: artisan.watchdog.Watchdog.GetSystemInfo:input_type -> artisan.watchdog.Empty
+	3,  // 31: artisan.watchdog.Watchdog.GetSecurityTripStatus:input_type -> artisan.watchdog.Empty
+	3,  // 32: artisan.watchdog.Watchdog.GetVersionInfo:input_type -> artisan.watchdog.Empty
+	33, // 33: artisan.watchdog.Watchdog.ExecuteCommand:input_type -> artisan.watchdog.CommandRequest
+	15, // 34: artisan.watchdog.Watchdog.QueryUsage:input_type -> artisan.watchdog.UsageQueryRequest
+	9,  // 35: artisan.watchdog.Watchdog.ListApplications:output_type -> artisan.watchdog.ApplicationStatusList
+	8,  // 36: artisan.watchdog.Watchdog.GetApplication:output_type -> artisan.watchdog.ApplicationStatusResponse
+	11, // 37: artisan.watchdog.Watchdog.GetCurrentLogs:output_type -> artisan.watchdog.CurrentLogsResponse
+	14, // 38: artisan.watchdog.Watchdog.QueryHistoricalLogs:output_type -> artisan.watchdog.HistoricalLogsResponse
+	18, // 39: artisan.watchdog.Watchdog.ListBuilds:output_type -> artisan.watchdog.BuildStatusList
+	20, // 40: artisan.watchdog.Watchdog.ListVerifications:output_type -> artisan.watchdog.VerificationEntryList
+	21, // 41: artisan.watchdog.Watchdog.GetSystemInfo:output_type -> artisan.watchdog.SystemInfo
+	22, // 42: artisan.watchdog.Watchdog.GetSecurityTripStatus:output_type -> artisan.watchdog.SecurityTripStatus
+	23, // 43: artisan.watchdog.Watchdog.GetVersionInfo:output_type -> artisan.watchdog.VersionInfo
+	34, // 44: artisan.watchdog.Watchdog.ExecuteCommand:output_type -> artisan.watchdog.CommandResponse
+	16, // 45: artisan.watchdog.Watchdog.QueryUsage:output_type -> artisan.watchdog.UsageQueryResponse
+	35, // [35:46] is the sub-list for method output_type
+	24, // [24:35] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_watchdog_proto_init() }
@@ -2004,7 +2697,7 @@ func file_watchdog_proto_init() {
 		return
 	}
 	file_watchdog_proto_msgTypes[3].OneofWrappers = []any{}
-	file_watchdog_proto_msgTypes[14].OneofWrappers = []any{
+	file_watchdog_proto_msgTypes[21].OneofWrappers = []any{
 		(*SetConfigValue_BuildCommand)(nil),
 		(*SetConfigValue_RunCommand)(nil),
 		(*SetConfigValue_DependenciesCommand)(nil),
@@ -2016,7 +2709,7 @@ func file_watchdog_proto_init() {
 		(*SetConfigValue_ChangesNeeded)(nil),
 		(*SetConfigValue_DirScanInterval)(nil),
 	}
-	file_watchdog_proto_msgTypes[23].OneofWrappers = []any{
+	file_watchdog_proto_msgTypes[30].OneofWrappers = []any{
 		(*CommandRequest_Start)(nil),
 		(*CommandRequest_Stop)(nil),
 		(*CommandRequest_Reload)(nil),
@@ -2031,8 +2724,8 @@ func file_watchdog_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_watchdog_proto_rawDesc), len(file_watchdog_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   25,
+			NumEnums:      3,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

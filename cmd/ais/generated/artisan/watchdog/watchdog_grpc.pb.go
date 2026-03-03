@@ -21,12 +21,15 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	Watchdog_ListApplications_FullMethodName      = "/artisan.watchdog.Watchdog/ListApplications"
 	Watchdog_GetApplication_FullMethodName        = "/artisan.watchdog.Watchdog/GetApplication"
+	Watchdog_GetCurrentLogs_FullMethodName        = "/artisan.watchdog.Watchdog/GetCurrentLogs"
+	Watchdog_QueryHistoricalLogs_FullMethodName   = "/artisan.watchdog.Watchdog/QueryHistoricalLogs"
 	Watchdog_ListBuilds_FullMethodName            = "/artisan.watchdog.Watchdog/ListBuilds"
 	Watchdog_ListVerifications_FullMethodName     = "/artisan.watchdog.Watchdog/ListVerifications"
 	Watchdog_GetSystemInfo_FullMethodName         = "/artisan.watchdog.Watchdog/GetSystemInfo"
 	Watchdog_GetSecurityTripStatus_FullMethodName = "/artisan.watchdog.Watchdog/GetSecurityTripStatus"
 	Watchdog_GetVersionInfo_FullMethodName        = "/artisan.watchdog.Watchdog/GetVersionInfo"
 	Watchdog_ExecuteCommand_FullMethodName        = "/artisan.watchdog.Watchdog/ExecuteCommand"
+	Watchdog_QueryUsage_FullMethodName            = "/artisan.watchdog.Watchdog/QueryUsage"
 )
 
 // WatchdogClient is the client API for Watchdog service.
@@ -35,12 +38,15 @@ const (
 type WatchdogClient interface {
 	ListApplications(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ApplicationStatusList, error)
 	GetApplication(ctx context.Context, in *ApplicationStatusRequest, opts ...grpc.CallOption) (*ApplicationStatusResponse, error)
+	GetCurrentLogs(ctx context.Context, in *CurrentLogsRequest, opts ...grpc.CallOption) (*CurrentLogsResponse, error)
+	QueryHistoricalLogs(ctx context.Context, in *HistoricalLogsRequest, opts ...grpc.CallOption) (*HistoricalLogsResponse, error)
 	ListBuilds(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*BuildStatusList, error)
 	ListVerifications(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*VerificationEntryList, error)
 	GetSystemInfo(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*SystemInfo, error)
 	GetSecurityTripStatus(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*SecurityTripStatus, error)
 	GetVersionInfo(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*VersionInfo, error)
 	ExecuteCommand(ctx context.Context, in *CommandRequest, opts ...grpc.CallOption) (*CommandResponse, error)
+	QueryUsage(ctx context.Context, in *UsageQueryRequest, opts ...grpc.CallOption) (*UsageQueryResponse, error)
 }
 
 type watchdogClient struct {
@@ -65,6 +71,26 @@ func (c *watchdogClient) GetApplication(ctx context.Context, in *ApplicationStat
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ApplicationStatusResponse)
 	err := c.cc.Invoke(ctx, Watchdog_GetApplication_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *watchdogClient) GetCurrentLogs(ctx context.Context, in *CurrentLogsRequest, opts ...grpc.CallOption) (*CurrentLogsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CurrentLogsResponse)
+	err := c.cc.Invoke(ctx, Watchdog_GetCurrentLogs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *watchdogClient) QueryHistoricalLogs(ctx context.Context, in *HistoricalLogsRequest, opts ...grpc.CallOption) (*HistoricalLogsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HistoricalLogsResponse)
+	err := c.cc.Invoke(ctx, Watchdog_QueryHistoricalLogs_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -131,18 +157,31 @@ func (c *watchdogClient) ExecuteCommand(ctx context.Context, in *CommandRequest,
 	return out, nil
 }
 
+func (c *watchdogClient) QueryUsage(ctx context.Context, in *UsageQueryRequest, opts ...grpc.CallOption) (*UsageQueryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UsageQueryResponse)
+	err := c.cc.Invoke(ctx, Watchdog_QueryUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WatchdogServer is the server API for Watchdog service.
 // All implementations must embed UnimplementedWatchdogServer
 // for forward compatibility.
 type WatchdogServer interface {
 	ListApplications(context.Context, *Empty) (*ApplicationStatusList, error)
 	GetApplication(context.Context, *ApplicationStatusRequest) (*ApplicationStatusResponse, error)
+	GetCurrentLogs(context.Context, *CurrentLogsRequest) (*CurrentLogsResponse, error)
+	QueryHistoricalLogs(context.Context, *HistoricalLogsRequest) (*HistoricalLogsResponse, error)
 	ListBuilds(context.Context, *Empty) (*BuildStatusList, error)
 	ListVerifications(context.Context, *Empty) (*VerificationEntryList, error)
 	GetSystemInfo(context.Context, *Empty) (*SystemInfo, error)
 	GetSecurityTripStatus(context.Context, *Empty) (*SecurityTripStatus, error)
 	GetVersionInfo(context.Context, *Empty) (*VersionInfo, error)
 	ExecuteCommand(context.Context, *CommandRequest) (*CommandResponse, error)
+	QueryUsage(context.Context, *UsageQueryRequest) (*UsageQueryResponse, error)
 	mustEmbedUnimplementedWatchdogServer()
 }
 
@@ -158,6 +197,12 @@ func (UnimplementedWatchdogServer) ListApplications(context.Context, *Empty) (*A
 }
 func (UnimplementedWatchdogServer) GetApplication(context.Context, *ApplicationStatusRequest) (*ApplicationStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetApplication not implemented")
+}
+func (UnimplementedWatchdogServer) GetCurrentLogs(context.Context, *CurrentLogsRequest) (*CurrentLogsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCurrentLogs not implemented")
+}
+func (UnimplementedWatchdogServer) QueryHistoricalLogs(context.Context, *HistoricalLogsRequest) (*HistoricalLogsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method QueryHistoricalLogs not implemented")
 }
 func (UnimplementedWatchdogServer) ListBuilds(context.Context, *Empty) (*BuildStatusList, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListBuilds not implemented")
@@ -176,6 +221,9 @@ func (UnimplementedWatchdogServer) GetVersionInfo(context.Context, *Empty) (*Ver
 }
 func (UnimplementedWatchdogServer) ExecuteCommand(context.Context, *CommandRequest) (*CommandResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ExecuteCommand not implemented")
+}
+func (UnimplementedWatchdogServer) QueryUsage(context.Context, *UsageQueryRequest) (*UsageQueryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method QueryUsage not implemented")
 }
 func (UnimplementedWatchdogServer) mustEmbedUnimplementedWatchdogServer() {}
 func (UnimplementedWatchdogServer) testEmbeddedByValue()                  {}
@@ -230,6 +278,42 @@ func _Watchdog_GetApplication_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WatchdogServer).GetApplication(ctx, req.(*ApplicationStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Watchdog_GetCurrentLogs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CurrentLogsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).GetCurrentLogs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_GetCurrentLogs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).GetCurrentLogs(ctx, req.(*CurrentLogsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Watchdog_QueryHistoricalLogs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HistoricalLogsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).QueryHistoricalLogs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_QueryHistoricalLogs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).QueryHistoricalLogs(ctx, req.(*HistoricalLogsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -342,6 +426,24 @@ func _Watchdog_ExecuteCommand_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Watchdog_QueryUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UsageQueryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).QueryUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_QueryUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).QueryUsage(ctx, req.(*UsageQueryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Watchdog_ServiceDesc is the grpc.ServiceDesc for Watchdog service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -356,6 +458,14 @@ var Watchdog_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetApplication",
 			Handler:    _Watchdog_GetApplication_Handler,
+		},
+		{
+			MethodName: "GetCurrentLogs",
+			Handler:    _Watchdog_GetCurrentLogs_Handler,
+		},
+		{
+			MethodName: "QueryHistoricalLogs",
+			Handler:    _Watchdog_QueryHistoricalLogs_Handler,
 		},
 		{
 			MethodName: "ListBuilds",
@@ -380,6 +490,10 @@ var Watchdog_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ExecuteCommand",
 			Handler:    _Watchdog_ExecuteCommand_Handler,
+		},
+		{
+			MethodName: "QueryUsage",
+			Handler:    _Watchdog_QueryUsage_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

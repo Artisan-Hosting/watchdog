@@ -9,6 +9,8 @@ use once_cell::sync::Lazy;
 use std::env;
 use tokio::time::{Duration, sleep};
 
+use crate::runtime_flags::runtime_flags;
+
 #[cfg(ebpf_supported)]
 mod linux;
 
@@ -28,6 +30,17 @@ pub struct EbpfManager {
 
 impl EbpfManager {
     fn initialize() -> Self {
+        if runtime_flags().dummy_ebpf {
+            log!(
+                LogLevel::Warn,
+                "Runtime flag --dummy-ebpf active; forcing dummy network tracker"
+            );
+            return Self {
+                tracker: Tracker::Dummy(dummy::BandwidthTracker::new()),
+                active: false,
+            };
+        }
+
         #[cfg(ebpf_supported)]
         {
             match linux::BandwidthTracker::new() {

@@ -79,6 +79,13 @@ pub const WATCHDOG_PID_LEDGER_PATH: &str = "/opt/artisan/tmp/.artisan_watchdog_p
 pub const WATCHDOG_TAMPER_FLAG_PATH: &str = "/opt/artisan/log/.ais_tamper";
 /// Audit log where watchdog records consumed tamper markers.
 pub const WATCHDOG_SECURITY_AUDIT_LOG_PATH: &str = "/opt/artisan/log/security_trip_audit.log";
+/// Encrypted startup/shutdown file-integrity manifest path.
+pub const WATCHDOG_INTEGRITY_MANIFEST_PATH: &str = "/opt/artisan/tmp/.watchdog_integrity_manifest";
+/// Environment flag used to disable startup integrity enforcement for testing.
+pub const WATCHDOG_IGNORE_INTEGRITY_ENV: &str = "AIS_WATCHDOG_IGNORE_HASHES";
+/// Directory roots included in startup/shutdown integrity hashing.
+pub const WATCHDOG_INTEGRITY_ROOTS: [&str; 3] =
+    [ARTISAN_VETTED_DIR, ARTISAN_BIN_DIR, "/opt/artisan/etc"];
 
 /// Canonical list of files that must be present for watchdog to proceed.
 pub const CORE_VERIFICATION_PATHS: [&str; 2] = [LEDGER_PATH, GIT_CONFIG_PATH];
