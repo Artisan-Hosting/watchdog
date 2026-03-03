@@ -238,54 +238,33 @@ async fn refresh_runtime_health_and_network(
     check_stdx: bool,
 ) -> Result<(), ErrorArrayItem> {
     let mut runtime_snapshots: HashMap<String, RuntimeSnapshot> = HashMap::new();
-
-    // to shorten the time
-    let mut processes = process_store
-        .try_write_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
-        .await?;
+    let process_names: Vec<String> = {
+        let processes = process_store
+            .try_read_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
+            .await?;
+        processes.keys().cloned().collect()
+    };
 
     '_collect_runtime_snapshots: {
-        for (name, process) in processes.iter_mut() {
-            let mut snapshot = RuntimeSnapshot::default();
-            match process {
-                definitions::SupervisedProcesses::Child(child) => {
-                    ensure_resource_monitor_healthy_for_child(name, child).await;
-                    if check_stdx {
-                        ensure_stdx_monitor_healthy_for_child(name, child).await;
-                    }
-                    let mut metrics = child.get_metrics().await.ok();
-                    backfill_tree_usage_metrics(name, &child.monitor, &mut metrics).await;
-                    if let Some(metrics) = metrics {
-                        snapshot.cpu_usage = Some(metrics.cpu_usage);
-                        snapshot.memory_usage = Some(metrics.memory_usage);
-                    }
-                    match child.get_pid().await {
-                        Ok(pid) => {
-                            snapshot.pid = Some(pid);
-                            snapshot.network_usage = compute_network_usage_for_pid(name, pid).await;
-                        }
-                        Err(_) => snapshot.network_usage = None,
-                    }
-                }
-                definitions::SupervisedProcesses::Process(proc) => {
-                    mark_stdx_healthy(name).await;
-                    ensure_resource_monitor_healthy_for_process(name, proc).await;
-                    let mut metrics = proc.get_metrics().await.ok();
-                    backfill_tree_usage_metrics(name, &proc.monitor, &mut metrics).await;
-                    if let Some(metrics) = metrics {
-                        snapshot.cpu_usage = Some(metrics.cpu_usage);
-                        snapshot.memory_usage = Some(metrics.memory_usage);
-                    }
-                    let pid = proc.get_pid() as u32;
-                    snapshot.pid = Some(pid);
-                    snapshot.network_usage = compute_network_usage_for_pid(name, pid).await;
-                }
+        for name in process_names {
+            let mut snapshot = {
+                let mut processes = process_store
+                    .try_write_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
+                    .await?;
+                let Some(process) = processes.get_mut(&name) else {
+                    continue;
+                };
+                collect_runtime_snapshot_for_process(&name, process, check_stdx).await
+            };
+
+            if let Some(pid) = snapshot.pid {
+                snapshot.network_usage = compute_network_usage_for_pid(&name, pid).await;
             }
-            runtime_snapshots.insert(name.clone(), snapshot);
+
+            runtime_snapshots.insert(name, snapshot);
         }
     }
 
-    drop(processes);
     record_runtime_snapshots_in_ledger(&runtime_snapshots).await;
     apply_runtime_snapshots_to_status_stores(
         system_status_store,
@@ -319,6 +298,49 @@ async fn record_runtime_snapshots_in_ledger(snapshots: &HashMap<String, RuntimeS
     if !entries.is_empty() {
         ledger::record_batch(entries).await;
     }
+}
+
+async fn collect_runtime_snapshot_for_process(
+    name: &str,
+    process: &mut definitions::SupervisedProcesses,
+    check_stdx: bool,
+) -> RuntimeSnapshot {
+    let mut snapshot = RuntimeSnapshot::default();
+
+    match process {
+        definitions::SupervisedProcesses::Child(child) => {
+            ensure_resource_monitor_healthy_for_child(name, child).await;
+            if check_stdx {
+                ensure_stdx_monitor_healthy_for_child(name, child).await;
+            }
+
+            let mut metrics = child.get_metrics().await.ok();
+            backfill_tree_usage_metrics(name, &child.monitor, &mut metrics).await;
+            if let Some(metrics) = metrics {
+                snapshot.cpu_usage = Some(metrics.cpu_usage);
+                snapshot.memory_usage = Some(metrics.memory_usage);
+            }
+
+            if let Ok(pid) = child.get_pid().await {
+                snapshot.pid = Some(pid);
+            }
+        }
+        definitions::SupervisedProcesses::Process(proc) => {
+            mark_stdx_healthy(name).await;
+            ensure_resource_monitor_healthy_for_process(name, proc).await;
+
+            let mut metrics = proc.get_metrics().await.ok();
+            backfill_tree_usage_metrics(name, &proc.monitor, &mut metrics).await;
+            if let Some(metrics) = metrics {
+                snapshot.cpu_usage = Some(metrics.cpu_usage);
+                snapshot.memory_usage = Some(metrics.memory_usage);
+            }
+
+            snapshot.pid = Some(proc.get_pid() as u32);
+        }
+    }
+
+    snapshot
 }
 
 async fn should_log_stdx_unhealthy(name: &str) -> bool {

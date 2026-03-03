@@ -479,10 +479,10 @@ async fn collect_process_observations(
     process_store: &definitions::ChildProcessArray,
     name: &str,
 ) -> Result<ProcessObservations, ErrorArrayItem> {
-    let mut processes = process_store
-        .try_write_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
+    let processes = process_store
+        .try_read_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
         .await?;
-    let observations = if let Some(process) = processes.get_mut(name) {
+    let observations = if let Some(process) = processes.get(name) {
         observe_supervised_process(name, process).await?
     } else {
         ProcessObservations::default()
@@ -493,7 +493,7 @@ async fn collect_process_observations(
 
 async fn observe_supervised_process(
     name: &str,
-    process: &mut definitions::SupervisedProcesses,
+    process: &definitions::SupervisedProcesses,
 ) -> Result<ProcessObservations, ErrorArrayItem> {
     let mut observations = ProcessObservations::default();
 
