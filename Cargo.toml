@@ -24,6 +24,7 @@ byteorder = "1.5"
 getrandom = "0.2"
 rand = { version = "0.8", features = ["std"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
+rayon = "1.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 aya = { version = "0.13", default-features = false }

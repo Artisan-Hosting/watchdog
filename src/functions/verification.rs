@@ -12,6 +12,7 @@ use artisan_middleware::{
     encryption::{simple_decrypt, simple_encrypt},
     timestamp::current_timestamp,
 };
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -20,6 +21,7 @@ use std::{
     fs::{self, File},
     io::{ErrorKind, Read},
     path::{Path, PathBuf},
+    time::Instant,
 };
 use tokio::fs as tokio_fs;
 
@@ -31,6 +33,7 @@ use crate::definitions::{
 const DEBUG_OVERRIDE_ROOTS_ENV: &str = "AIS_WATCHDOG_DEBUG_HASH_ROOTS";
 const DEBUG_OVERRIDE_MANIFEST_PATH_ENV: &str = "AIS_WATCHDOG_DEBUG_HASH_MANIFEST";
 const MAX_REPORTED_DISCREPANCIES: usize = 25;
+const HASH_PARALLEL_THRESHOLD: usize = 24;
 
 #[derive(Debug, Clone)]
 pub struct StartupIntegrityReport {
@@ -61,6 +64,8 @@ struct FileDigestRecord {
 
 /// Verifies on-disk runtime roots against the previously persisted manifest.
 pub async fn verify_startup_integrity() -> Result<StartupIntegrityReport, ErrorArrayItem> {
+    let verify_started = Instant::now();
+
     if integrity_checks_ignored() {
         log!(
             LogLevel::Warn,
@@ -74,11 +79,18 @@ pub async fn verify_startup_integrity() -> Result<StartupIntegrityReport, ErrorA
         });
     }
 
+    let load_started = Instant::now();
     let Some(expected) = load_manifest().await? else {
         log!(
             LogLevel::Warn,
             "No integrity manifest found at {}; startup check skipped for this boot",
             manifest_path()
+        );
+        log!(
+            LogLevel::Debug,
+            "Startup integrity check completed in {}ms (manifest not found; load={}ms)",
+            verify_started.elapsed().as_millis(),
+            load_started.elapsed().as_millis()
         );
         return Ok(StartupIntegrityReport {
             entries: vec![new_summary_entry(true, "bootstrap", "manifest-missing")],
@@ -86,9 +98,28 @@ pub async fn verify_startup_integrity() -> Result<StartupIntegrityReport, ErrorA
             ignored: false,
         });
     };
+    let load_ms = load_started.elapsed().as_millis();
 
+    let build_started = Instant::now();
     let current = build_manifest()?;
+    let build_ms = build_started.elapsed().as_millis();
+
+    let compare_started = Instant::now();
     let discrepancies = compare_manifests(&expected, &current);
+    let compare_ms = compare_started.elapsed().as_millis();
+    let verify_ms = verify_started.elapsed().as_millis();
+
+    log!(
+        LogLevel::Debug,
+        "Startup integrity timing: total={}ms load={}ms build={}ms compare={}ms expected_files={} current_files={} discrepancies={}",
+        verify_ms,
+        load_ms,
+        build_ms,
+        compare_ms,
+        expected.files.len(),
+        current.files.len(),
+        discrepancies.len()
+    );
 
     let mut entries = Vec::new();
     entries.push(new_summary_entry(
@@ -134,15 +165,26 @@ pub async fn verify_startup_integrity() -> Result<StartupIntegrityReport, ErrorA
 
 /// Persists a fresh integrity manifest during graceful shutdown.
 pub async fn persist_shutdown_integrity_manifest() -> Result<(), ErrorArrayItem> {
+    let persist_started = Instant::now();
+
+    let build_started = Instant::now();
     let manifest = build_manifest()?;
+    let build_ms = build_started.elapsed().as_millis();
+
+    let serialize_started = Instant::now();
     let payload = serde_json::to_vec(&manifest).map_err(|err| {
         ErrorArrayItem::new(
             Errors::GeneralError,
             format!("Failed to serialize integrity manifest: {err}"),
         )
     })?;
+    let serialize_ms = serialize_started.elapsed().as_millis();
 
+    let encrypt_started = Instant::now();
     let encrypted = simple_encrypt(&payload)?;
+    let encrypt_ms = encrypt_started.elapsed().as_millis();
+
+    let write_started = Instant::now();
     let manifest_path = manifest_path();
     if let Some(parent) = Path::new(&manifest_path).parent() {
         tokio_fs::create_dir_all(parent).await.map_err(|err| {
@@ -164,12 +206,23 @@ pub async fn persist_shutdown_integrity_manifest() -> Result<(), ErrorArrayItem>
                 ),
             )
         })?;
+    let write_ms = write_started.elapsed().as_millis();
 
     log!(
         LogLevel::Info,
         "Persisted shutdown integrity manifest with {} files to {}",
         manifest.files.len(),
         manifest_path
+    );
+    log!(
+        LogLevel::Debug,
+        "Shutdown integrity persist timing: total={}ms build={}ms serialize={}ms encrypt={}ms write={}ms files={}",
+        persist_started.elapsed().as_millis(),
+        build_ms,
+        serialize_ms,
+        encrypt_ms,
+        write_ms,
+        manifest.files.len()
     );
     Ok(())
 }
@@ -286,21 +339,29 @@ async fn load_manifest() -> Result<Option<IntegrityManifest>, ErrorArrayItem> {
 }
 
 fn build_manifest() -> Result<IntegrityManifest, ErrorArrayItem> {
+    let build_started = Instant::now();
     let roots = monitored_roots();
     let mut files: Vec<PathBuf> = Vec::new();
+    let collect_started = Instant::now();
     for root in &roots {
         collect_files(Path::new(root), &mut files)?;
     }
+    let collect_ms = collect_started.elapsed().as_millis();
     files.sort();
 
-    let mut records = Vec::new();
-    for file in files {
-        let digest = hash_file(&file)?;
-        records.push(FileDigestRecord {
-            path: file.to_string_lossy().to_string(),
-            sha256: digest,
-        });
-    }
+    let hash_started = Instant::now();
+    let records = build_digest_records(files)?;
+    let hash_ms = hash_started.elapsed().as_millis();
+
+    log!(
+        LogLevel::Debug,
+        "Integrity manifest build timing: total={}ms collect={}ms hash={}ms files={} roots={}",
+        build_started.elapsed().as_millis(),
+        collect_ms,
+        hash_ms,
+        records.len(),
+        roots.len()
+    );
 
     Ok(IntegrityManifest {
         generated_at: current_timestamp(),
@@ -372,6 +433,50 @@ fn hash_file(path: &Path) -> Result<String, ErrorArrayItem> {
     }
 
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Hashes all files and returns digest records in stable path order.
+///
+/// For small sets, this stays single-threaded to avoid scheduling overhead.
+/// For larger sets, hashing is parallelized across available worker threads.
+fn build_digest_records(files: Vec<PathBuf>) -> Result<Vec<FileDigestRecord>, ErrorArrayItem> {
+    if files.len() < HASH_PARALLEL_THRESHOLD {
+        return files
+            .into_iter()
+            .map(|file| {
+                let digest = hash_file(file.as_path())?;
+                Ok(FileDigestRecord {
+                    path: file.to_string_lossy().to_string(),
+                    sha256: digest,
+                })
+            })
+            .collect();
+    }
+
+    let worker_hint = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    log!(
+        LogLevel::Debug,
+        "Hashing {} files in parallel for integrity manifest (workers~{})",
+        files.len(),
+        worker_hint
+    );
+
+    let mut records: Vec<FileDigestRecord> = files
+        .par_iter()
+        .map(|file| -> Result<FileDigestRecord, ErrorArrayItem> {
+            let digest = hash_file(file.as_path())?;
+            Ok(FileDigestRecord {
+                path: file.to_string_lossy().to_string(),
+                sha256: digest,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Keep output deterministic regardless of parallel execution order.
+    records.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(records)
 }
 
 fn compare_manifests(expected: &IntegrityManifest, current: &IntegrityManifest) -> Vec<String> {
