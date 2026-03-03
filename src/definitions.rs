@@ -24,7 +24,7 @@ pub const ARTISAN_APPS_DIR: &str = "/opt/artisan/src";
 /// Base config directory housing all Artisan applications.
 pub const ARTISAN_CONF_DIR: &str = "/opt/artisan/etc";
 /// Base temp directory housing all Artisan applications.
-pub const ARTISAN_TMP_DIR: &str = "/opt/artisan/etc";
+pub const ARTISAN_TMP_DIR: &str = "/opt/artisan/tmp";
 /// Directory where built binaries are deployed.
 pub const ARTISAN_BIN_DIR: &str = "/opt/artisan/bin";
 /// Directory storing vetted build artifacts.

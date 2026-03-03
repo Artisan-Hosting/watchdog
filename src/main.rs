@@ -26,8 +26,9 @@ use tokio::task::{JoinHandle, JoinSet};
 use crate::{
     definitions::{self as defs, ARTISAN_BIN_DIR, ARTISAN_CONF_DIR, CRITICAL_APPLICATIONS},
     functions::{
-        configure_www_data_command, generate_safe_client_runner_list, monitor_application_states,
-        monitor_runtime_health, persist_shutdown_integrity_manifest, verify_startup_integrity,
+        configure_client_runtime_command, generate_safe_client_runner_list,
+        monitor_application_states, monitor_runtime_health, persist_shutdown_integrity_manifest,
+        verify_startup_integrity,
     },
     runtime_flags::runtime_flags,
     scripts::{
@@ -711,9 +712,8 @@ async fn main() -> Result<(), ErrorArrayItem> {
                             "Running {} without www-data UID/GID due to --client-root",
                             client_app
                         );
-                    } else {
-                        configure_www_data_command(&mut command);
                     }
+                    configure_client_runtime_command(&mut command, !client_root);
 
                     match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
                         Ok(mut child) => {

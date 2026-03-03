@@ -28,7 +28,8 @@ use once_cell::sync::Lazy;
 use std::{
     collections::{HashMap, HashSet},
     convert::TryFrom,
-    env, io,
+    io,
+    process::Stdio,
     time::Duration,
 };
 use tokio::{
@@ -43,6 +44,8 @@ const WWW_DATA_HOME: &str = "/var/www";
 const WWW_DATA_NVM_DIR: &str = "/var/www/.nvm";
 const WWW_DATA_UID: u32 = 33;
 const WWW_DATA_GID: u32 = 33;
+const ROOT_USER: &str = "root";
+const ROOT_HOME: &str = "/root";
 const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const RESOURCE_MONITOR_MAX_STALENESS: Duration = Duration::from_millis(1_500);
 const RESOURCE_MONITOR_MAX_CONSECUTIVE_FAILURES: u64 = 5;
@@ -741,25 +744,56 @@ impl CommandStubResult {
 
 /// Applies the runtime environment expected by client apps running as `www-data`.
 pub fn configure_www_data_command(command: &mut Command) {
-    command.uid(WWW_DATA_UID);
-    command.gid(WWW_DATA_GID);
+    configure_client_runtime_command(command, true);
+}
 
-    command.env("HOME", WWW_DATA_HOME);
-    command.env("USER", WWW_DATA_USER);
-    command.env("LOGNAME", WWW_DATA_USER);
-    command.env("NVM_DIR", WWW_DATA_NVM_DIR);
-    command.env("SHELL", "/bin/bash");
+/// Applies a hardened runtime environment for client application processes.
+///
+/// When `run_as_www_data` is true the command drops privileges to `www-data`.
+/// Otherwise it runs as root but still gets the same environment reset and
+/// sandbox defaults.
+pub fn configure_client_runtime_command(command: &mut Command, run_as_www_data: bool) {
+    let (user, home) = if run_as_www_data {
+        command.uid(WWW_DATA_UID);
+        command.gid(WWW_DATA_GID);
+        (WWW_DATA_USER, WWW_DATA_HOME)
+    } else {
+        (ROOT_USER, ROOT_HOME)
+    };
 
-    // let nvm_bin = format!("{}/bin", WWW_DATA_NVM_DIR);
+    // Avoid inheriting root shell/session state from watchdog.
+    command.env_clear();
+    command.stdin(Stdio::null());
+    command.kill_on_drop(true);
+
     let node_bin = format!("{}/versions/node/v23.5.0/bin", WWW_DATA_NVM_DIR);
+    let combined_path = format!("{node_bin}:{DEFAULT_PATH}");
 
-    let existing_path = env::var("PATH").unwrap_or_else(|_| DEFAULT_PATH.to_string());
-    let mut segments = Vec::new();
-    segments.push(node_bin);
-    // segments.push(nvm_bin);
-    segments.push(existing_path);
-    let combined_path = segments.join(":");
+    command.env("HOME", home);
+    command.env("USER", user);
+    command.env("LOGNAME", user);
+    command.env("NVM_DIR", WWW_DATA_NVM_DIR);
     command.env("PATH", combined_path);
+    command.env("SHELL", "/bin/bash");
+    command.env("LANG", "C.UTF-8");
+    command.env("LC_ALL", "C.UTF-8");
+    command.env("TMPDIR", "/tmp");
+    command.env("RUST_BACKTRACE", "0");
+
+    #[cfg(target_os = "linux")]
+    unsafe {
+        command.pre_exec(|| {
+            // Restrictive default file mode for any files created by client apps.
+            nix::libc::umask(0o027);
+
+            // Prevent privilege gain via setuid/setgid binaries after launch.
+            if nix::libc::prctl(nix::libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+
+            Ok(())
+        });
+    }
 }
 
 /// Attempts to start an application and register its spawned process handle.
@@ -829,7 +863,15 @@ async fn start_with_handle(
 
     let mut command = Command::new(binary_path);
     if !is_system_app {
-        configure_www_data_command(&mut command);
+        let run_as_www_data = !crate::runtime_flags::runtime_flags().client_root;
+        if !run_as_www_data {
+            log!(
+                LogLevel::Warn,
+                "Running {} without www-data UID/GID due to --client-root",
+                application
+            );
+        }
+        configure_client_runtime_command(&mut command, run_as_www_data);
     }
     match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
         Ok(mut child) => {
