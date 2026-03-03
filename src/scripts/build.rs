@@ -1,3 +1,5 @@
+//! Build/deploy logic for system applications.
+
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -16,24 +18,28 @@ use super::{
     replace_symlink, timestamp_string,
 };
 
+/// Builds and deploys a system application binary, then snapshots it to vetted storage.
 pub fn build_application(app_name: &str) -> ScriptResult<()> {
-    if app_name.is_empty() {
-        return Err(new_error(
-            Errors::GeneralError,
-            "Application name cannot be empty",
-        ));
-    }
+    '_validate_inputs: {
+        if app_name.is_empty() {
+            return Err(new_error(
+                Errors::GeneralError,
+                "Application name cannot be empty",
+            ));
+        }
 
-    let app_dir = Path::new(ARTISAN_APPS_DIR).join(app_name);
-    if !app_dir.is_dir() {
-        return Err(new_error(
-            Errors::NotFound,
-            format!(
-                "Application directory does not exist: {}",
-                app_dir.display()
-            ),
-        ));
+        let app_dir = Path::new(ARTISAN_APPS_DIR).join(app_name);
+        if !app_dir.is_dir() {
+            return Err(new_error(
+                Errors::NotFound,
+                format!(
+                    "Application directory does not exist: {}",
+                    app_dir.display()
+                ),
+            ));
+        }
     }
+    let app_dir = Path::new(ARTISAN_APPS_DIR).join(app_name);
 
     prepare_directories()?;
 
@@ -46,53 +52,55 @@ pub fn build_application(app_name: &str) -> ScriptResult<()> {
         &format!("[{}] Starting build for {}", timestamp_string(), app_name),
     )?;
 
-    append_line(
-        &build_log,
-        &format!(
-            "[{}] Resetting the repo folder incase we edited any files",
-            timestamp_string()
-        ),
-    )?;
-    run_command(
-        "git",
-        ["reset", "--hard"],
-        &app_dir,
-        &build_log,
-        &error_log,
-        &format!("Failed to reset dir {}", app_name),
-    )?;
+    '_sync_and_build: {
+        append_line(
+            &build_log,
+            &format!(
+                "[{}] Resetting the repo folder incase we edited any files",
+                timestamp_string()
+            ),
+        )?;
+        run_command(
+            "git",
+            ["reset", "--hard"],
+            &app_dir,
+            &build_log,
+            &error_log,
+            &format!("Failed to reset dir {}", app_name),
+        )?;
 
-    append_line(
-        &build_log,
-        &format!(
-            "[{}] Pulling latest changes from '{}' branch",
-            timestamp_string(),
-            RELEASE_BRANCH
-        ),
-    )?;
-    run_command(
-        "git",
-        ["pull", "origin", RELEASE_BRANCH],
-        &app_dir,
-        &build_log,
-        &error_log,
-        &format!("Failed to pull latest changes for {}", app_name),
-    )?;
+        append_line(
+            &build_log,
+            &format!(
+                "[{}] Pulling latest changes from '{}' branch",
+                timestamp_string(),
+                RELEASE_BRANCH
+            ),
+        )?;
+        run_command(
+            "git",
+            ["pull", "origin", RELEASE_BRANCH],
+            &app_dir,
+            &build_log,
+            &error_log,
+            &format!("Failed to pull latest changes for {}", app_name),
+        )?;
 
-    append_line(
-        &build_log,
-        &format!("[{}] Starting cargo build...", timestamp_string()),
-    )?;
-    let cargo_path = cargo_path();
-    run_command_with_env(
-        cargo_path,
-        ["build", "--release"],
-        &app_dir,
-        [("CARGO_TARGET_DIR", app_dir.join("target"))],
-        &build_log,
-        &error_log,
-        &format!("Build failed for {}", app_name),
-    )?;
+        append_line(
+            &build_log,
+            &format!("[{}] Starting cargo build...", timestamp_string()),
+        )?;
+        let cargo_path = cargo_path();
+        run_command_with_env(
+            cargo_path,
+            ["build", "--release"],
+            &app_dir,
+            [("CARGO_TARGET_DIR", app_dir.join("target"))],
+            &build_log,
+            &error_log,
+            &format!("Build failed for {}", app_name),
+        )?;
+    }
 
     let target_path = app_dir.join("target").join("release").join(app_name);
 
@@ -143,6 +151,7 @@ pub fn build_application(app_name: &str) -> ScriptResult<()> {
     Ok(())
 }
 
+/// Ensures build output directories exist before build/revert operations.
 pub(crate) fn prepare_directories() -> ScriptResult<()> {
     for dir in [ARTISAN_BIN_DIR, ARTISAN_VETTED_DIR, ARTISAN_LOG_DIR] {
         fs::create_dir_all(dir)
@@ -151,6 +160,7 @@ pub(crate) fn prepare_directories() -> ScriptResult<()> {
     Ok(())
 }
 
+/// Runs a command in `current_dir` while appending output to build/error logs.
 pub(crate) fn run_command(
     program: &str,
     args: impl IntoIterator<Item = &'static str>,
@@ -170,6 +180,7 @@ pub(crate) fn run_command(
     )
 }
 
+/// Runs a command with environment overrides and captures stdout/stderr logs.
 pub(crate) fn run_command_with_env(
     program: &str,
     args: impl IntoIterator<Item = &'static str>,
@@ -207,6 +218,7 @@ pub(crate) fn run_command_with_env(
     Ok(())
 }
 
+/// Returns the preferred cargo binary path for the current host context.
 pub(crate) fn cargo_path() -> &'static str {
     if Path::new(CARGO_ROOT_BIN).exists() {
         CARGO_ROOT_BIN
@@ -215,6 +227,7 @@ pub(crate) fn cargo_path() -> &'static str {
     }
 }
 
+/// Copies a built artifact to its deployment destination and logs the action.
 pub(crate) fn copy_artifact(
     source: &Path,
     destination: &Path,

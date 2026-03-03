@@ -1,3 +1,5 @@
+//! Recursive `cargo clean` utilities for application workspaces.
+
 use std::{
     ffi::OsStr,
     fs,
@@ -14,6 +16,7 @@ use crate::definitions::ARTISAN_APPS_DIR;
 
 use super::{ScriptResult, io_error, new_error};
 
+/// Runs `cargo clean` for every manifest found under a system application tree.
 pub fn clean_cargo_projects(app_name: &str) -> ScriptResult<()> {
     let app_dir = Path::new(ARTISAN_APPS_DIR).join(app_name);
     if !app_dir.is_dir() {
@@ -39,6 +42,7 @@ pub fn clean_cargo_projects(app_name: &str) -> ScriptResult<()> {
     Ok(())
 }
 
+/// Recursively collects all `Cargo.toml` files under `dir`.
 fn collect_manifests(dir: &Path, manifests: &mut Vec<PathBuf>) -> ScriptResult<()> {
     for entry in fs::read_dir(dir)
         .map_err(|err| io_error(format!("Unable to read directory: {}", dir.display()), err))?
@@ -85,7 +89,9 @@ fn collect_manifests(dir: &Path, manifests: &mut Vec<PathBuf>) -> ScriptResult<(
     Ok(())
 }
 
-// allow this so we can clean as we go, incase we have low system space.
+/// Runs `cargo clean` in the provided crate directory.
+///
+/// This is intentionally executed per-manifest to reduce peak disk usage.
 pub fn run_cargo_clean(dir: &Path) -> ScriptResult<()> {
     let status = Command::new("cargo")
         .arg("clean")

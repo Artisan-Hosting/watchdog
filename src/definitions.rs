@@ -1,3 +1,5 @@
+//! Shared constants, identifiers, and state/store types for watchdog runtime.
+
 use std::{collections::HashMap, net::Ipv4Addr, sync::Arc};
 
 use artisan_middleware::{

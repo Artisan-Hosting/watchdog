@@ -1,3 +1,5 @@
+//! Startup/shutdown integrity manifest generation and comparison.
+
 use artisan_middleware::{
     dusa_collection_utils::{
         core::{
@@ -38,6 +40,7 @@ pub struct StartupIntegrityReport {
 }
 
 impl StartupIntegrityReport {
+    /// Returns `true` when no actionable integrity discrepancies were detected.
     pub fn is_healthy(&self) -> bool {
         self.ignored || self.discrepancies.is_empty()
     }
@@ -56,6 +59,7 @@ struct FileDigestRecord {
     sha256: String,
 }
 
+/// Verifies on-disk runtime roots against the previously persisted manifest.
 pub async fn verify_startup_integrity() -> Result<StartupIntegrityReport, ErrorArrayItem> {
     if integrity_checks_ignored() {
         log!(
@@ -128,6 +132,7 @@ pub async fn verify_startup_integrity() -> Result<StartupIntegrityReport, ErrorA
     })
 }
 
+/// Persists a fresh integrity manifest during graceful shutdown.
 pub async fn persist_shutdown_integrity_manifest() -> Result<(), ErrorArrayItem> {
     let manifest = build_manifest()?;
     let payload = serde_json::to_vec(&manifest).map_err(|err| {

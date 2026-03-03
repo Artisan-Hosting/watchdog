@@ -1,3 +1,8 @@
+//! eBPF network usage tracking facade.
+//!
+//! This module hides backend selection (real eBPF vs dummy) and provides
+//! a single global manager used by the rest of watchdog.
+
 use artisan_middleware::{
     aggregator::NetworkUsage,
     dusa_collection_utils::{
@@ -75,10 +80,12 @@ impl EbpfManager {
         }
     }
 
+    /// Returns `true` when the real eBPF backend is active.
     pub fn is_active(&self) -> bool {
         self.active
     }
 
+    /// Registers a PID in the backend tracker.
     pub fn register_pid(&self, pid: u32) -> Result<(), ErrorArrayItem> {
         match &self.tracker {
             #[cfg(ebpf_supported)]
@@ -87,6 +94,7 @@ impl EbpfManager {
         }
     }
 
+    /// Reads network usage for a tracked PID.
     pub fn usage_for_pid(&self, pid: u32) -> Result<Option<NetworkUsage>, ErrorArrayItem> {
         match &self.tracker {
             #[cfg(ebpf_supported)]
@@ -95,6 +103,7 @@ impl EbpfManager {
         }
     }
 
+    /// Removes entries for dead PIDs from the backend tracker.
     pub fn cleanup_dead_pids(&self) -> Result<(), ErrorArrayItem> {
         match &self.tracker {
             #[cfg(ebpf_supported)]
@@ -110,18 +119,22 @@ pub fn manager() -> &'static EbpfManager {
     &MANAGER
 }
 
+/// Registers a PID against the global manager.
 pub fn register_pid(pid: u32) -> Result<(), ErrorArrayItem> {
     manager().register_pid(pid)
 }
 
+/// Reads usage for a PID via the global manager.
 pub fn usage_for_pid(pid: u32) -> Result<Option<NetworkUsage>, ErrorArrayItem> {
     manager().usage_for_pid(pid)
 }
 
+/// Prunes dead PID entries via the global manager.
 pub fn cleanup_dead_pids() -> Result<(), ErrorArrayItem> {
     manager().cleanup_dead_pids()
 }
 
+/// Registers a PID with bounded retries for transient backend contention.
 pub async fn register_pid_with_retry(pid: u32) -> Result<(), ErrorArrayItem> {
     let mut delay = Duration::from_millis(50);
     const MAX_ATTEMPTS: usize = 3;

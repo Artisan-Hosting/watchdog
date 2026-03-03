@@ -1,3 +1,6 @@
+//! Watchdog daemon entrypoint: startup validation, build/spawn orchestration,
+//! runtime monitoring loops, and gRPC service bootstrap.
+
 use artisan_middleware::{
     aggregator::Status,
     dusa_collection_utils::{
@@ -22,8 +25,8 @@ use tokio::task::JoinSet;
 use crate::{
     definitions::{self as defs, ARTISAN_BIN_DIR, ARTISAN_CONF_DIR, CRITICAL_APPLICATIONS},
     functions::{
-        generate_safe_client_runner_list, monitor_application_states, monitor_runtime_health,
-        persist_shutdown_integrity_manifest, verify_startup_integrity,
+        configure_www_data_command, generate_safe_client_runner_list, monitor_application_states,
+        monitor_runtime_health, persist_shutdown_integrity_manifest, verify_startup_integrity,
     },
     runtime_flags::runtime_flags,
     scripts::{
@@ -112,9 +115,9 @@ async fn main() -> Result<(), ErrorArrayItem> {
     }
     apply_debug_security_marker(&system_information_store).await;
 
-    crate::pid_persistence::initialise().await?;
-    crate::pid_persistence::reclaim_orphan_processes().await?;
-    crate::ledger::initialise().await?;
+    pid_persistence::initialise().await?;
+    pid_persistence::reclaim_orphan_processes().await?;
+    ledger::initialise().await?;
 
     if ebpf::manager().is_active() {
         log!(LogLevel::Info, "eBPF network tracking is active");
@@ -467,9 +470,9 @@ async fn main() -> Result<(), ErrorArrayItem> {
                                     );
 
                                     match ebpf::register_pid_with_retry(pid).await {
-                                        Ok(_) => crate::pid_persistence::clear_pid_failure(pid).await,
+                                        Ok(_) => pid_persistence::clear_pid_failure(pid).await,
                                         Err(err) => {
-                                            if !crate::pid_persistence::is_pid_marked_dead(pid).await {
+                                            if !pid_persistence::is_pid_marked_dead(pid).await {
                                                 log!(
                                                     LogLevel::Warn,
                                                     "Failed to register {} (PID {}) with eBPF tracker: {}",
@@ -478,13 +481,11 @@ async fn main() -> Result<(), ErrorArrayItem> {
                                                     err.err_mesg
                                                 );
                                             }
-                                            crate::pid_persistence::record_pid_failure(pid).await;
+                                            pid_persistence::record_pid_failure(pid).await;
                                         }
                                     }
 
-                                    if let Err(err) =
-                                        crate::pid_persistence::remember_process(&ais, pid).await
-                                    {
+                                    if let Err(err) = pid_persistence::remember_process(&ais, pid).await {
                                         log!(
                                             LogLevel::Error,
                                             "Failed to persist PID for {}: {}",
@@ -699,7 +700,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
                             client_app
                         );
                     } else {
-                        crate::functions::configure_www_data_command(&mut command);
+                        configure_www_data_command(&mut command);
                     }
 
                     match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
@@ -714,9 +715,9 @@ async fn main() -> Result<(), ErrorArrayItem> {
                                     );
 
                                     match ebpf::register_pid_with_retry(pid).await {
-                                        Ok(_) => crate::pid_persistence::clear_pid_failure(pid).await,
+                                        Ok(_) => pid_persistence::clear_pid_failure(pid).await,
                                         Err(err) => {
-                                            if !crate::pid_persistence::is_pid_marked_dead(pid).await {
+                                            if !pid_persistence::is_pid_marked_dead(pid).await {
                                                 log!(
                                                     LogLevel::Warn,
                                                     "Failed to register {} (PID {}) with eBPF tracker: {}",
@@ -725,12 +726,12 @@ async fn main() -> Result<(), ErrorArrayItem> {
                                                     err.err_mesg
                                                 );
                                             }
-                                            crate::pid_persistence::record_pid_failure(pid).await;
+                                            pid_persistence::record_pid_failure(pid).await;
                                         }
                                     }
 
                                     if let Err(err) =
-                                        crate::pid_persistence::remember_process(&client_app, pid).await
+                                        pid_persistence::remember_process(&client_app, pid).await
                                     {
                                         log!(
                                             LogLevel::Error,

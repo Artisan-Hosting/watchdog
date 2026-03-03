@@ -1,3 +1,8 @@
+//! SQLite-backed usage and log ledger.
+//!
+//! This module stores periodic resource snapshots and stdout/stderr records so
+//! watchdog can serve both current and historical telemetry over gRPC.
+
 use std::path::Path;
 
 use artisan_middleware::{
@@ -81,15 +86,20 @@ const MAX_HISTORICAL_QUERY_LIMIT: u32 = 5_000;
 
 static CONNECTION: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
 
+/// Opens the ledger database and ensures schema/indexes are present.
 pub async fn initialise() -> Result<(), ErrorArrayItem> {
-    let mut guard = CONNECTION.lock().await;
-    let conn = open_connection()?;
-    initialise_schema(&conn)?;
-    *guard = Some(conn);
+    '_open_and_prepare_db: {
+        let mut guard = CONNECTION.lock().await;
+        let conn = open_connection()?;
+        initialise_schema(&conn)?;
+        *guard = Some(conn);
+    }
+
     log!(LogLevel::Info, "Usage ledger initialised (sqlite backing)");
     Ok(())
 }
 
+/// Persists a batch of per-application metrics samples.
 pub async fn record_batch(entries: Vec<(String, Metrics)>) {
     if entries.is_empty() {
         return;
@@ -109,6 +119,7 @@ pub async fn record_batch(entries: Vec<(String, Metrics)>) {
     }
 }
 
+/// Returns the latest metrics sample for an application, if available.
 pub async fn latest_metrics(name: &str) -> Option<Metrics> {
     let guard = CONNECTION.lock().await;
     guard
@@ -116,6 +127,7 @@ pub async fn latest_metrics(name: &str) -> Option<Metrics> {
         .and_then(|conn| read_latest_sample(conn, name).ok().flatten())
 }
 
+/// Summarizes usage metrics for an application over a `[start, end]` window.
 pub async fn summarize_usage(
     name: &str,
     start: u64,
@@ -129,6 +141,7 @@ pub async fn summarize_usage(
     summarize_window(conn, name, start, end)
 }
 
+/// Persists new stdout/stderr lines for an application.
 pub async fn record_stream_entries(
     application: &str,
     stream: LogStream,
@@ -146,6 +159,7 @@ pub async fn record_stream_entries(
     insert_stream_entries(conn, application, stream, entries)
 }
 
+/// Queries paginated historical logs for an application and stream filter.
 pub async fn query_historical_logs(
     application: &str,
     stream: LogStreamFilter,

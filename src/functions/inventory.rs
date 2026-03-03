@@ -1,9 +1,12 @@
+//! Application inventory helpers for build/spawn safety checks.
+
 use artisan_middleware::dusa_collection_utils::{
     core::{errors::ErrorArrayItem, logger::LogLevel, types::pathtype::PathType},
     log,
 };
 use artisan_middleware::git_actions::GitCredentials;
-use std::fs;
+use get_if_addrs::{IfAddr, get_if_addrs};
+use std::{fs, io, net::Ipv4Addr};
 
 use crate::definitions::{ARTISAN_BIN_DIR, CRITICAL_APPLICATIONS, GIT_CONFIG_PATH};
 
@@ -84,4 +87,39 @@ pub async fn generate_safe_client_runner_list() -> Result<Vec<String>, ErrorArra
         .collect();
 
     Ok(client_applications_names)
+}
+
+/// Collects all host IPv4 addresses, excluding loopback and common
+/// container-bridge interfaces (Docker/Podman/veth/cni).
+pub fn get_all_ipv4() -> io::Result<Vec<Ipv4Addr>> {
+    let interfaces = get_if_addrs().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+    let mut ips: Vec<Ipv4Addr> = interfaces
+        .into_iter()
+        .filter(|iface| {
+            let name = iface.name.to_lowercase();
+            if name == "lo" {
+                return false;
+            }
+            if name.starts_with("docker")
+                || name.starts_with("br-")
+                || name.starts_with("veth")
+                || name.starts_with("cni")
+                || name.starts_with("flannel.")
+                || name.contains("docker")
+                || name.contains("vethernet")
+            {
+                return false;
+            }
+            true
+        })
+        .filter_map(|iface| match iface.addr {
+            IfAddr::V4(v4) if !v4.ip.is_loopback() => Some(v4.ip),
+            _ => None,
+        })
+        .collect();
+
+    ips.sort_unstable();
+    ips.dedup();
+    Ok(ips)
 }

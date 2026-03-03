@@ -1,3 +1,5 @@
+//! Crash-recovery persistence for supervised process IDs.
+
 use artisan_middleware::{
     dusa_collection_utils::{
         core::{
@@ -58,6 +60,7 @@ pub async fn remember_process(name: &str, pid: u32) -> Result<(), ErrorArrayItem
     persist_to_disk(&cache).await
 }
 
+/// Returns `true` if a PID has been marked unrecoverable in this process.
 pub async fn is_pid_marked_dead(pid: u32) -> bool {
     let guard = FAILED_PID_RECLAIMS.lock().await;
     guard.contains(&pid)
@@ -77,10 +80,12 @@ async fn remove_dead_pid(pid: u32) {
     }
 }
 
+/// Marks a PID as failed during reclaim/attach attempts.
 pub async fn record_pid_failure(pid: u32) {
     mark_pid_dead(pid).await;
 }
 
+/// Clears a PID from the failed-reclaim set.
 pub async fn clear_pid_failure(pid: u32) {
     remove_dead_pid(pid).await;
 }

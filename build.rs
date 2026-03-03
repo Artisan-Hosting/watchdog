@@ -1,9 +1,12 @@
+//! Build script for protobuf generation, version export, and eBPF object build.
+
 use std::{
     env, fs,
     path::{Path, PathBuf},
     process::Command,
 };
 
+/// Build-script entrypoint.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_build::configure().compile_protos(&["proto/watchdog.proto"], &["proto"])?;
     configure_version_env_vars()?;
@@ -11,6 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Resolves and exports dependency version metadata for runtime reporting.
 fn configure_version_env_vars() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=Cargo.lock");
     println!("cargo:rerun-if-changed=Cargo.toml");
@@ -40,6 +44,7 @@ fn configure_version_env_vars() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Extracts `version` for a package from Cargo.lock package sections.
 fn extract_lockfile_package_version(content: &str, package_name: &str) -> Option<String> {
     let mut current_name: Option<String> = None;
     let mut current_version: Option<String> = None;
@@ -76,6 +81,7 @@ fn extract_lockfile_package_version(content: &str, package_name: &str) -> Option
     None
 }
 
+/// Extracts a dependency version from Cargo.toml dependency lines.
 fn extract_toml_dependency_version(content: &str, dependency_name: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
@@ -102,6 +108,7 @@ fn extract_toml_dependency_version(content: &str, dependency_name: &str) -> Opti
     None
 }
 
+/// Parses a TOML `key = "value"` assignment and returns the value.
 fn parse_toml_assignment<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let (lhs, rhs) = line.split_once('=')?;
     if lhs.trim() != key {
@@ -110,6 +117,7 @@ fn parse_toml_assignment<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     parse_quoted(rhs.trim())
 }
 
+/// Parses a quoted string value from TOML snippets.
 fn parse_quoted(input: &str) -> Option<&str> {
     let trimmed = input.trim();
     let rest = trimmed.strip_prefix('"')?;
@@ -117,6 +125,7 @@ fn parse_quoted(input: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
+/// Compiles and wires the eBPF object when target platform supports it.
 fn build_ebpf() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rustc-check-cfg=cfg(ebpf_supported)");
     println!("cargo:rerun-if-changed=src/ebpf/network.c");
@@ -186,6 +195,7 @@ fn build_ebpf() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Regenerates `vmlinux.h` from host BTF data via `bpftool`.
 fn refresh_vmlinux_header(header_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new("bpftool")
         .args([

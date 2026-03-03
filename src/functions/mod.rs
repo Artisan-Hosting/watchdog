@@ -1,11 +1,13 @@
+//! Public functional surface for watchdog runtime tasks.
+
 pub mod inventory;
 pub mod monitoring;
 pub mod verification;
 
-pub use inventory::generate_safe_client_runner_list;
+pub use inventory::{generate_safe_client_runner_list, get_all_ipv4};
 pub use monitoring::{
     CommandStubResult, ProcessStoreHandle, ProcessStoreKind, configure_www_data_command,
-    get_all_ipv4, monitor_application_states, monitor_runtime_health, rebuild_application_stub,
+    monitor_application_states, monitor_runtime_health, rebuild_application_stub,
     reload_application_stub, start_application_stub, stop_application_stub, take_process_by_name,
 };
 pub use verification::{persist_shutdown_integrity_manifest, verify_startup_integrity};

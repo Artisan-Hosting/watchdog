@@ -1,3 +1,5 @@
+//! Startup security-trip recovery from previous boot journal entries.
+
 use artisan_middleware::dusa_collection_utils::{
     core::{errors::ErrorArrayItem, logger::LogLevel},
     log,
@@ -13,10 +15,11 @@ use crate::definitions::{
     ARTISAN_LOG_DIR, SystemInformationStore, WATCHDOG_SECURITY_AUDIT_LOG_PATH,
 };
 
+/// Reads previous-boot watchdog reboot context and updates in-memory security state.
 pub async fn refresh_startup_trip_status(
     system_information_store: &SystemInformationStore,
 ) -> Result<(), ErrorArrayItem> {
-    let reboot_context = query_previous_boot_reboot_context().await;
+    let reboot_context = '_query_previous_boot: { query_previous_boot_reboot_context().await };
     let (security_tripped, security_trip_detected_at, security_trip_summary) =
         if let Some(ctx) = reboot_context.as_ref() {
             (
@@ -44,8 +47,10 @@ pub async fn refresh_startup_trip_status(
         info.security_trip_summary = security_trip_summary;
     }
 
-    if let Some(ctx) = reboot_context.as_ref() {
-        write_security_audit_line(ctx).await;
+    '_append_audit_log: {
+        if let Some(ctx) = reboot_context.as_ref() {
+            write_security_audit_line(ctx).await;
+        }
     }
 
     Ok(())

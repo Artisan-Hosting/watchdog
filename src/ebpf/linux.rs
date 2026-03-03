@@ -1,3 +1,5 @@
+//! Linux eBPF backend for per-process network traffic tracking.
+
 use artisan_middleware::{
     aggregator::NetworkUsage,
     dusa_collection_utils::{
@@ -24,6 +26,7 @@ pub struct TrafficStats {
 unsafe impl aya::Pod for TrafficStats {}
 
 impl TrafficStats {
+    /// Converts raw eBPF map counters into middleware network usage data.
     pub fn to_network_usage(&self) -> NetworkUsage {
         NetworkUsage {
             rx_bytes: self.rx_bytes,
@@ -37,6 +40,7 @@ pub struct BandwidthTracker {
 }
 
 impl BandwidthTracker {
+    /// Loads the compiled eBPF object, attaches probes, and returns a tracker.
     pub fn new() -> Result<Self, ErrorArrayItem> {
         let bpf_data = include_bytes_aligned!(env!("EBPF_OBJECT"));
         let mut bpf = Ebpf::load(bpf_data)
@@ -82,6 +86,7 @@ impl BandwidthTracker {
         })
     }
 
+    /// Ensures the PID exists in the eBPF map so traffic can be aggregated.
     pub fn track_pid(&self, pid: u32) -> Result<(), ErrorArrayItem> {
         let mut bpf = self.bpf.try_write().map_err(|err| {
             ErrorArrayItem::new(
@@ -114,6 +119,7 @@ impl BandwidthTracker {
         Ok(())
     }
 
+    /// Returns current RX/TX totals for a tracked PID.
     pub fn get_usage(&self, pid: u32) -> Result<Option<NetworkUsage>, ErrorArrayItem> {
         let bpf = self.bpf.try_read().map_err(|err| {
             ErrorArrayItem::new(
@@ -135,6 +141,7 @@ impl BandwidthTracker {
         }
     }
 
+    /// Removes map entries for processes that are no longer active.
     pub fn cleanup_dead_pids(&self) -> Result<(), ErrorArrayItem> {
         let mut bpf = self.bpf.try_write().map_err(|err| {
             ErrorArrayItem::new(

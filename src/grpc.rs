@@ -1,3 +1,5 @@
+//! gRPC transport layer for watchdog control and telemetry queries.
+
 use std::{fmt::Write, io::ErrorKind, time::Duration};
 
 use artisan_middleware::{
@@ -19,6 +21,7 @@ use crate::{
     ledger,
 };
 
+/// Generated protobuf service/messages.
 pub mod proto {
     tonic::include_proto!("artisan.watchdog");
 }
@@ -34,6 +37,7 @@ use proto::{
     watchdog_server::{Watchdog, WatchdogServer},
 };
 
+/// Starts the watchdog gRPC server on the configured Unix socket path.
 pub async fn serve_watchdog(
     system_application_status_store: definitions::SystemApplicationStatusStore,
     client_application_status_store: definitions::ClientApplicationStatusStore,
@@ -44,14 +48,18 @@ pub async fn serve_watchdog(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let socket_path = definitions::WATCHDOG_SOCKET_PATH;
 
-    if let Err(err) = tokio::fs::remove_file(socket_path).await {
-        if err.kind() != ErrorKind::NotFound {
-            return Err(Box::new(err));
+    '_prepare_socket: {
+        if let Err(err) = tokio::fs::remove_file(socket_path).await {
+            if err.kind() != ErrorKind::NotFound {
+                return Err(Box::new(err));
+            }
         }
     }
 
-    let listener = UnixListener::bind(socket_path)?;
-    let incoming = UnixListenerStream::new(listener);
+    let incoming = '_bind_socket: {
+        let listener = UnixListener::bind(socket_path)?;
+        break '_bind_socket UnixListenerStream::new(listener);
+    };
 
     let service = WatchdogService::new(
         system_application_status_store,
@@ -68,12 +76,14 @@ pub async fn serve_watchdog(
         socket_path
     );
 
-    Server::builder()
-        .timeout(Duration::from_secs(120))
-        .concurrency_limit_per_connection(64)
-        .add_service(WatchdogServer::new(service))
-        .serve_with_incoming(incoming)
-        .await?;
+    '_serve_grpc: {
+        Server::builder()
+            .timeout(Duration::from_secs(120))
+            .concurrency_limit_per_connection(64)
+            .add_service(WatchdogServer::new(service))
+            .serve_with_incoming(incoming)
+            .await?;
+    }
 
     Ok(())
 }
@@ -544,7 +554,7 @@ impl Watchdog for WatchdogService {
                                 .map(|pid| pid.to_string())
                                 .unwrap_or_else(|| "n/a".to_string());
                             let mut message = format!(
-                                "[status] {application} ({store_kind}) => state={:?}, pid={pid}, cpu={:.2}%, mem={:.2}",
+                                "[status] {application} ({store_kind:?}) => state={:?}, pid={pid}, cpu={:.2}%, mem={:.2}",
                                 status.status, status.cpu_usage, status.memory_usage
                             );
                             if let Some(network) = status.network_usage.as_ref() {
