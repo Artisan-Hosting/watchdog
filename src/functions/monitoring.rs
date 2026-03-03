@@ -31,7 +31,11 @@ use std::{
     env, io,
     time::Duration,
 };
-use tokio::{process::Command, sync::Mutex, time};
+use tokio::{
+    process::Command,
+    sync::{Mutex, watch},
+    time,
+};
 mod state_refresh;
 
 const WWW_DATA_USER: &str = "www-data";
@@ -44,9 +48,19 @@ const RESOURCE_MONITOR_MAX_STALENESS: Duration = Duration::from_millis(1_500);
 const RESOURCE_MONITOR_MAX_CONSECUTIVE_FAILURES: u64 = 5;
 const STDX_MONITOR_MAX_STALENESS: Duration = Duration::from_millis(2_500);
 const STDX_MONITOR_MAX_CONSECUTIVE_FAILURES: u64 = 8;
+const PROCESS_STORE_LOCK_TIMEOUT: Duration = Duration::from_millis(400);
+const LOCK_TIMEOUT_PATTERN: &str = "Timeout while trying to acquire";
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SkipStats {
+    total: u64,
+    consecutive: u64,
+}
 
 static STDX_UNHEALTHY_LATCH: Lazy<Mutex<HashSet<String>>> =
     Lazy::new(|| Mutex::new(HashSet::new()));
+static SKIPPED_TASKS: Lazy<Mutex<HashMap<&'static str, SkipStats>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Periodically refreshes application status data for both system-critical
 /// and client-managed processes. Stats for each cohort are stored separately
@@ -57,29 +71,54 @@ pub async fn monitor_application_states(
     client_status_store: definitions::ClientApplicationStatusStore,
     process_store: definitions::ChildProcessArray,
     interval: Duration,
+    mut shutdown: watch::Receiver<bool>,
 ) {
     let mut ticker = time::interval(interval);
     loop {
-        ticker.tick().await;
-        log!(LogLevel::Trace, "monitor_application_states tick");
-        if let Err(err) =
-            state_refresh::refresh_system_statuses_once(&system_status_store, &process_store).await
-        {
-            log!(
-                LogLevel::Warn,
-                "Failed to refresh application statuses: {}",
-                err.err_mesg
-            );
+        tokio::select! {
+            changed = shutdown.changed() => {
+                match changed {
+                    Ok(_) if *shutdown.borrow() => {
+                        log!(LogLevel::Info, "Application state monitor loop shutting down");
+                        break;
+                    }
+                    Ok(_) => continue,
+                    Err(_) => {
+                        log!(LogLevel::Info, "Application state monitor loop shutting down (sender dropped)");
+                        break;
+                    }
+                }
+            }
+            _ = ticker.tick() => {}
         }
 
-        if let Err(err) =
-            state_refresh::refresh_client_statuses_once(&client_status_store, &process_store).await
+        log!(LogLevel::Trace, "monitor_application_states tick");
+        match state_refresh::refresh_system_statuses_once(&system_status_store, &process_store)
+            .await
         {
-            log!(
-                LogLevel::Trace,
-                "Failed to refresh client application statuses: {}",
-                err.err_mesg
-            );
+            Ok(_) => clear_skip_streak("state_refresh_system").await,
+            Err(err) => {
+                record_skip_if_lock_timeout("state_refresh_system", &err).await;
+                log!(
+                    LogLevel::Warn,
+                    "Failed to refresh application statuses: {}",
+                    err.err_mesg
+                );
+            }
+        }
+
+        match state_refresh::refresh_client_statuses_once(&client_status_store, &process_store)
+            .await
+        {
+            Ok(_) => clear_skip_streak("state_refresh_client").await,
+            Err(err) => {
+                record_skip_if_lock_timeout("state_refresh_client", &err).await;
+                log!(
+                    LogLevel::Trace,
+                    "Failed to refresh client application statuses: {}",
+                    err.err_mesg
+                );
+            }
         }
     }
 }
@@ -92,6 +131,7 @@ pub async fn monitor_runtime_health(
     client_status_store: definitions::ClientApplicationStatusStore,
     interval: Duration,
     stdx_interval: Duration,
+    mut shutdown: watch::Receiver<bool>,
 ) {
     let mut ticker = time::interval(interval);
     let base_ms = interval.as_millis().max(1);
@@ -99,7 +139,23 @@ pub async fn monitor_runtime_health(
     let mut tick_count: u64 = 0;
 
     loop {
-        ticker.tick().await;
+        tokio::select! {
+            changed = shutdown.changed() => {
+                match changed {
+                    Ok(_) if *shutdown.borrow() => {
+                        log!(LogLevel::Info, "Runtime health monitor loop shutting down");
+                        break;
+                    }
+                    Ok(_) => continue,
+                    Err(_) => {
+                        log!(LogLevel::Info, "Runtime health monitor loop shutting down (sender dropped)");
+                        break;
+                    }
+                }
+            }
+            _ = ticker.tick() => {}
+        }
+
         tick_count = tick_count.wrapping_add(1);
         let divisor = stdx_every.max(1);
         let check_stdx = tick_count % divisor == 0;
@@ -112,11 +168,14 @@ pub async fn monitor_runtime_health(
         )
         .await
         {
+            record_skip_if_lock_timeout("runtime_health_pass", &err).await;
             log!(
                 LogLevel::Warn,
                 "Failed runtime monitor pass: {}",
                 err.err_mesg
             );
+        } else {
+            clear_skip_streak("runtime_health_pass").await;
         }
 
         if let Err(err) = ebpf::cleanup_dead_pids() {
@@ -129,6 +188,49 @@ pub async fn monitor_runtime_health(
     }
 }
 
+fn is_lock_timeout_error(err: &ErrorArrayItem) -> bool {
+    err.err_mesg.contains(LOCK_TIMEOUT_PATTERN)
+}
+
+async fn record_skip_if_lock_timeout(task: &'static str, err: &ErrorArrayItem) {
+    if !is_lock_timeout_error(err) {
+        return;
+    }
+
+    let mut tracker = SKIPPED_TASKS.lock().await;
+    let stats = tracker.entry(task).or_default();
+    stats.total = stats.total.saturating_add(1);
+    stats.consecutive = stats.consecutive.saturating_add(1);
+    let consecutive = stats.consecutive;
+    let total = stats.total;
+
+    if matches!(consecutive, 1 | 3 | 5 | 10) || consecutive % 25 == 0 {
+        log!(
+            LogLevel::Warn,
+            "Lock contention skipped {} (consecutive={}, total={})",
+            task,
+            consecutive,
+            total
+        );
+    }
+}
+
+async fn clear_skip_streak(task: &'static str) {
+    let mut tracker = SKIPPED_TASKS.lock().await;
+    if let Some(stats) = tracker.get_mut(task) {
+        if stats.consecutive > 0 {
+            log!(
+                LogLevel::Info,
+                "{} lock contention recovered after {} skipped passes (total skips={})",
+                task,
+                stats.consecutive,
+                stats.total
+            );
+            stats.consecutive = 0;
+        }
+    }
+}
+
 async fn refresh_runtime_health_and_network(
     process_store: &definitions::ChildProcessArray,
     system_status_store: &definitions::SystemApplicationStatusStore,
@@ -136,7 +238,11 @@ async fn refresh_runtime_health_and_network(
     check_stdx: bool,
 ) -> Result<(), ErrorArrayItem> {
     let mut runtime_snapshots: HashMap<String, RuntimeSnapshot> = HashMap::new();
-    let mut processes = process_store.try_write().await?;
+
+    // to shorten the time
+    let mut processes = process_store
+        .try_write_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
+        .await?;
 
     '_collect_runtime_snapshots: {
         for (name, process) in processes.iter_mut() {
@@ -552,14 +658,20 @@ impl ProcessStoreHandle {
         name: &str,
         process: definitions::SupervisedProcesses,
     ) -> Result<(), ErrorArrayItem> {
-        let mut guard = self.store.try_write().await?;
+        let mut guard = self
+            .store
+            .try_write_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
+            .await?;
         guard.insert(name.to_string(), process);
         Ok(())
     }
 
     /// Removes a process entry from this store.
     pub async fn remove(&self, name: &str) -> Result<(), ErrorArrayItem> {
-        let mut guard = self.store.try_write().await?;
+        let mut guard = self
+            .store
+            .try_write_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
+            .await?;
         guard.remove(name);
         Ok(())
     }
@@ -580,7 +692,10 @@ pub async fn take_process_by_name(
 ) -> Result<Option<(ProcessStoreHandle, definitions::SupervisedProcesses)>, ErrorArrayItem> {
     for store_ref in stores {
         let handle = store_ref.clone();
-        let mut guard = handle.store.try_write().await?;
+        let mut guard = handle
+            .store
+            .try_write_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
+            .await?;
         let process = guard.remove(name);
         drop(guard);
         if let Some(process) = process {

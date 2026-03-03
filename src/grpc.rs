@@ -10,6 +10,7 @@ use artisan_middleware::{
     timestamp::current_timestamp,
 };
 use tokio::net::UnixListener;
+use tokio::sync::watch;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
@@ -45,6 +46,7 @@ pub async fn serve_watchdog(
     verification_status_store: definitions::VerificationStatusStore,
     system_information_store: definitions::SystemInformationStore,
     process_store: definitions::ChildProcessArray,
+    mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let socket_path = definitions::WATCHDOG_SOCKET_PATH;
 
@@ -77,11 +79,19 @@ pub async fn serve_watchdog(
     );
 
     '_serve_grpc: {
+        let shutdown_signal = async move {
+            while !*shutdown.borrow() {
+                if shutdown.changed().await.is_err() {
+                    break;
+                }
+            }
+        };
+
         Server::builder()
             .timeout(Duration::from_secs(120))
             .concurrency_limit_per_connection(64)
             .add_service(WatchdogServer::new(service))
-            .serve_with_incoming(incoming)
+            .serve_with_incoming_shutdown(incoming, shutdown_signal)
             .await?;
     }
 

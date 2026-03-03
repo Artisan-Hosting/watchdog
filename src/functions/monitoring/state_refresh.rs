@@ -25,12 +25,15 @@ use std::{
 use tokio::{sync::Mutex, time};
 
 use crate::{
-    definitions::{self, ARTISAN_TMP_DIR, ApplicationIdentifiers, ApplicationStatus, SupervisedProcesses},
+    definitions::{
+        self, ARTISAN_TMP_DIR, ApplicationIdentifiers, ApplicationStatus, SupervisedProcesses,
+    },
     ebpf, ledger, pid_persistence,
 };
 
 const STATE_STALE_THRESHOLD_SECONDS: u64 = 30;
 const WATCHDOG_DECLARED_DEAD_MESSAGE: &str = "watchdog declared dead";
+const PROCESS_STORE_LOCK_TIMEOUT: Duration = Duration::from_millis(400);
 
 static LAST_SEEN_STATE_PIDS: Lazy<Mutex<HashMap<String, u32>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -154,7 +157,9 @@ pub(super) async fn refresh_client_statuses_once(
     process_store: &definitions::ChildProcessArray,
 ) -> Result<(), ErrorArrayItem> {
     let process_names: Vec<String> = {
-        let guard = process_store.try_read().await?;
+        let guard = process_store
+            .try_read_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
+            .await?;
         guard
             .keys()
             .filter(|name| !is_system_application_name(name))
@@ -311,7 +316,9 @@ async fn reconcile_process_store_with_state(
     };
 
     let entry_exists = {
-        let guard = process_store.try_read().await?;
+        let guard = process_store
+            .try_read_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
+            .await?;
         guard.contains_key(name)
     };
 
@@ -353,7 +360,9 @@ async fn reconcile_process_store_with_state(
             proc.monitor_usage().await;
 
             {
-                let mut guard = process_store.try_write().await?;
+                let mut guard = process_store
+                    .try_write_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
+                    .await?;
                 guard.insert(name.to_string(), SupervisedProcesses::Process(proc));
             }
 
@@ -470,7 +479,9 @@ async fn collect_process_observations(
     process_store: &definitions::ChildProcessArray,
     name: &str,
 ) -> Result<ProcessObservations, ErrorArrayItem> {
-    let mut processes = process_store.try_write().await?;
+    let mut processes = process_store
+        .try_write_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
+        .await?;
     let observations = if let Some(process) = processes.get_mut(name) {
         observe_supervised_process(name, process).await?
     } else {

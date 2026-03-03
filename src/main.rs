@@ -20,7 +20,8 @@ use tokio::process::Command;
 use tokio::signal::ctrl_c;
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::task::JoinSet;
+use tokio::sync::watch;
+use tokio::task::{JoinHandle, JoinSet};
 
 use crate::{
     definitions::{self as defs, ARTISAN_BIN_DIR, ARTISAN_CONF_DIR, CRITICAL_APPLICATIONS},
@@ -102,6 +103,11 @@ async fn main() -> Result<(), ErrorArrayItem> {
     let verification_status_store = defs::new_verification_status_store();
     let system_information_store = defs::new_system_information_store();
     let system_process_store = defs::new_child_process_array();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    let mut state_monitor_task: Option<JoinHandle<()>> = None;
+    let mut runtime_monitor_task: Option<JoinHandle<()>> = None;
+    let grpc_task: JoinHandle<()>;
 
     match security_trip::refresh_startup_trip_status(&system_information_store).await {
         Ok(_) => {}
@@ -138,25 +144,28 @@ async fn main() -> Result<(), ErrorArrayItem> {
             let system_status_store = system_application_status_store.clone();
             let client_status_store = client_application_status_store.clone();
             let process_store = system_process_store.clone();
+            let shutdown = shutdown_rx.clone();
             log!(LogLevel::Debug, "Launching application state monitor task");
-            tokio::spawn(async move {
+            state_monitor_task = Some(tokio::spawn(async move {
                 log!(LogLevel::Trace, "Application state monitor loop started");
                 monitor_application_states(
                     system_status_store,
                     client_status_store,
                     process_store,
                     Duration::from_secs(2),
+                    shutdown,
                 )
                 .await;
-            });
+            }));
         }
 
         {
             let process_store = system_process_store.clone();
             let system_status_store = system_application_status_store.clone();
             let client_status_store = client_application_status_store.clone();
+            let shutdown = shutdown_rx.clone();
             log!(LogLevel::Debug, "Launching runtime monitor health task");
-            tokio::spawn(async move {
+            runtime_monitor_task = Some(tokio::spawn(async move {
                 log!(LogLevel::Trace, "Runtime monitor health loop started");
                 monitor_runtime_health(
                     process_store,
@@ -164,9 +173,10 @@ async fn main() -> Result<(), ErrorArrayItem> {
                     client_status_store,
                     Duration::from_millis(250),
                     Duration::from_millis(500),
+                    shutdown,
                 )
                 .await;
-            });
+            }));
         }
     }
 
@@ -177,8 +187,9 @@ async fn main() -> Result<(), ErrorArrayItem> {
         let verification_store = verification_status_store.clone();
         let system_info_store = system_information_store.clone();
         let process_store = system_process_store.clone();
+        let shutdown = shutdown_rx.clone();
         log!(LogLevel::Debug, "Launching gRPC server task");
-        tokio::spawn(async move {
+        grpc_task = tokio::spawn(async move {
             log!(LogLevel::Trace, "gRPC server task initialising");
             if let Err(err) = grpc::serve_watchdog(
                 system_store,
@@ -187,6 +198,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
                 verification_store,
                 system_info_store,
                 process_store,
+                shutdown,
             )
             .await
             {
@@ -815,6 +827,23 @@ async fn main() -> Result<(), ErrorArrayItem> {
         );
     }
 
+    if shutdown_tx.send(true).is_err() {
+        log!(
+            LogLevel::Trace,
+            "Shutdown signal receivers were already dropped"
+        );
+    }
+
+    terminate_process_monitors(&system_process_store).await;
+
+    if let Some(handle) = state_monitor_task.take() {
+        shutdown_background_task("application state monitor", handle, Duration::from_secs(2)).await;
+    }
+    if let Some(handle) = runtime_monitor_task.take() {
+        shutdown_background_task("runtime health monitor", handle, Duration::from_secs(2)).await;
+    }
+    shutdown_background_task("gRPC server", grpc_task, Duration::from_secs(3)).await;
+
     if let Err(err) = persist_shutdown_integrity_manifest().await {
         log!(
             LogLevel::Error,
@@ -826,6 +855,58 @@ async fn main() -> Result<(), ErrorArrayItem> {
     log!(LogLevel::Debug, "Shutdown signal handled; exiting main");
 
     Ok(())
+}
+
+async fn terminate_process_monitors(process_store: &defs::ChildProcessArray) {
+    let mut processes = match process_store
+        .try_write_with_timeout(Some(Duration::from_secs(1)))
+        .await
+    {
+        Ok(guard) => guard,
+        Err(err) => {
+            log!(
+                LogLevel::Warn,
+                "Unable to acquire process store for monitor shutdown: {}",
+                err.err_mesg
+            );
+            return;
+        }
+    };
+
+    for (name, process) in processes.iter_mut() {
+        match process {
+            defs::SupervisedProcesses::Child(child) => {
+                child.terminate_stdx();
+                child.terminate_monitor();
+                log!(
+                    LogLevel::Trace,
+                    "Stopped stdx/resource monitors for {}",
+                    name
+                );
+            }
+            defs::SupervisedProcesses::Process(proc) => {
+                proc.terminate_monitor();
+                log!(LogLevel::Trace, "Stopped resource monitor for {}", name);
+            }
+        }
+    }
+}
+
+async fn shutdown_background_task(name: &str, mut handle: JoinHandle<()>, timeout: Duration) {
+    tokio::select! {
+        result = &mut handle => {
+            if let Err(err) = result {
+                log!(LogLevel::Warn, "Background task {name} ended with join error: {}", err);
+            } else {
+                log!(LogLevel::Debug, "Background task {name} shut down cleanly");
+            }
+        }
+        _ = tokio::time::sleep(timeout) => {
+            log!(LogLevel::Warn, "Background task {name} did not stop in {:?}; aborting", timeout);
+            handle.abort();
+            let _ = handle.await;
+        }
+    }
 }
 
 #[cfg(debug_assertions)]
