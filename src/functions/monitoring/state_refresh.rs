@@ -25,7 +25,7 @@ use std::{
 use tokio::{sync::Mutex, time};
 
 use crate::{
-    definitions::{self, ApplicationIdentifiers, ApplicationStatus, SupervisedProcesses},
+    definitions::{self, ARTISAN_TMP_DIR, ApplicationIdentifiers, ApplicationStatus, SupervisedProcesses},
     ebpf, ledger, pid_persistence,
 };
 
@@ -621,7 +621,7 @@ async fn clear_last_seen_pid(name: &str) {
 }
 
 fn state_file_path(ais_name: &str) -> PathType {
-    PathType::Content(format!("/tmp/.{}.state", ais_name))
+    PathType::Content(format!("{}/.{}.state", ARTISAN_TMP_DIR, ais_name))
 }
 
 fn current_timestamp_wrapper() -> u64 {
