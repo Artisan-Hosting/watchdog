@@ -4611,6 +4611,7 @@ enum {
 
 enum {
 	IO_WQ_BIT_EXIT = 0,
+	IO_WQ_BIT_EXIT_ON_IDLE = 1,
 };
 
 enum {
@@ -21956,6 +21957,7 @@ enum mapping_flags {
 	AS_INACCESSIBLE = 8,
 	AS_WRITEBACK_MAY_DEADLOCK_ON_RECLAIM = 9,
 	AS_KERNEL_FILE = 10,
+	AS_NO_DATA_INTEGRITY = 11,
 	AS_FOLIO_ORDER_BITS = 5,
 	AS_FOLIO_ORDER_MIN = 16,
 	AS_FOLIO_ORDER_MAX = 21,
@@ -25342,6 +25344,11 @@ enum pt_capabilities {
 	PT_CAP_mtc_periods = 15,
 	PT_CAP_cycle_thresholds = 16,
 	PT_CAP_psb_periods = 17,
+};
+
+enum pt_flags {
+	PT_kernel = 2,
+	PT_reserved = 13,
 };
 
 enum pt_level {
@@ -61828,6 +61835,7 @@ struct dir_context {
 	filldir_t actor;
 	loff_t pos;
 	int count;
+	unsigned int dt_flags_mask;
 };
 
 struct compat_linux_dirent;
@@ -70879,8 +70887,9 @@ struct dmem_cgroup_pool_state {
 	struct list_head region_node;
 	struct callback_head rcu;
 	struct page_counter cnt;
+	struct dmem_cgroup_pool_state *parent;
+	refcount_t ref;
 	bool inited;
-	long: 64;
 	long: 64;
 	long: 64;
 	long: 64;
@@ -79814,7 +79823,7 @@ struct ext4_tune_sb_params {
 	__u32 clear_feature_incompat_mask;
 	__u32 clear_feature_ro_compat_mask;
 	__u8 mount_opts[64];
-	__u8 pad[64];
+	__u8 pad[68];
 };
 
 struct ext4_xattr_entry;
@@ -95811,7 +95820,9 @@ struct iommu_iotlb_gather {
 
 struct iommu_mm_data {
 	u32 pasid;
+	struct mm_struct *mm;
 	struct list_head sva_domains;
+	struct list_head mm_list_elm;
 };
 
 struct iommu_user_data;
@@ -106387,6 +106398,8 @@ struct mmu_gather {
 	unsigned int vma_exec: 1;
 	unsigned int vma_huge: 1;
 	unsigned int vma_pfn: 1;
+	unsigned int unshared_tables: 1;
+	unsigned int fully_unshared_tables: 1;
 	unsigned int batch_count;
 	struct mmu_gather_batch *active;
 	struct mmu_gather_batch local;
@@ -121986,6 +121999,11 @@ struct pts_fs_info {
 	struct dentry *ptmx_dentry;
 };
 
+struct ptype_iter_state {
+	struct seq_net_private p;
+	struct net_device *dev;
+};
+
 struct pubkey_hdr {
 	uint8_t version;
 	uint32_t timestamp;
@@ -127676,6 +127694,8 @@ struct scsi_eh_save {
 	unsigned char cmnd[32];
 	struct scsi_data_buffer sdb;
 	struct scatterlist sense_sgl;
+	struct bio_crypt_ctx *rq_crypt_ctx;
+	struct blk_crypto_keyslot *rq_crypt_keyslot;
 };
 
 struct scsi_event {
@@ -144023,6 +144043,9 @@ struct trace_event_raw_dma_map {
 struct trace_event_raw_dma_map_sg {
 	struct trace_entry ent;
 	u32 __data_loc_device;
+	int full_nents;
+	int full_ents;
+	bool truncated;
 	u32 __data_loc_phys_addrs;
 	u32 __data_loc_dma_addrs;
 	u32 __data_loc_lengths;
@@ -155733,6 +155756,7 @@ struct vma_merge_struct {
 	struct vm_userfaultfd_ctx uffd_ctx;
 	struct anon_vma_name *anon_name;
 	enum vma_merge_state state;
+	struct vm_area_struct *copied_from;
 	bool just_expand: 1;
 	bool give_up_on_oom: 1;
 	bool skip_vma_uprobe: 1;

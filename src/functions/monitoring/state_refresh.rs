@@ -1,6 +1,6 @@
 //! State refresh and reconciliation for monitored applications.
 //!
-//! This module is responsible for loading `/tmp/.ais_*.state` snapshots,
+//! This module is responsible for loading `/opt/artisan/tmp/.ais_*.state` snapshots,
 //! reconciling the process store to reported PIDs, and merging those snapshots
 //! with live observations collected from supervised process handles.
 
@@ -26,7 +26,8 @@ use tokio::{sync::Mutex, time};
 
 use crate::{
     definitions::{
-        self, ARTISAN_TMP_DIR, ApplicationIdentifiers, ApplicationStatus, SupervisedProcesses,
+        self, ARTISAN_TMP_DIR, AIS_MANAGER, ApplicationIdentifiers, ApplicationStatus,
+        SupervisedProcesses,
     },
     ebpf, ledger, pid_persistence,
 };
@@ -34,6 +35,7 @@ use crate::{
 const STATE_STALE_THRESHOLD_SECONDS: u64 = 30;
 const WATCHDOG_DECLARED_DEAD_MESSAGE: &str = "watchdog declared dead";
 const PROCESS_STORE_LOCK_TIMEOUT: Duration = Duration::from_millis(400);
+const MANAGER_WATCHDOG_CONNECTED_PREFIX: &str = "watchdog_connected";
 
 static LAST_SEEN_STATE_PIDS: Lazy<Mutex<HashMap<String, u32>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -82,7 +84,7 @@ pub(super) async fn refresh_system_statuses_once(
         new_statuses.insert(app.ais.to_string(), app_status);
     }
 
-    if let Ok(dir) = fs::read_dir("/tmp") {
+    if let Ok(dir) = fs::read_dir(ARTISAN_TMP_DIR) {
         for entry in dir.flatten() {
             let file_name_os = entry.file_name();
             let Some(file_name) = file_name_os.to_str() else {
@@ -202,7 +204,7 @@ pub(super) async fn refresh_client_statuses_once(
         }
     }
 
-    if let Ok(dir) = fs::read_dir("/tmp") {
+    if let Ok(dir) = fs::read_dir(ARTISAN_TMP_DIR) {
         for entry in dir.flatten() {
             if let Some(file_name) = entry.file_name().to_str() {
                 if !file_name.starts_with('.') || !file_name.ends_with(".state") {
@@ -255,6 +257,69 @@ pub(super) async fn refresh_client_statuses_once(
     let mut store = client_store.write().await;
     *store = new_statuses;
     Ok(())
+}
+
+/// Refreshes the `manager_linked` bit in the system information store by
+/// reading `ais_manager`'s state file and looking for a connection marker in
+/// its `data` field.
+pub(super) async fn refresh_manager_linked_once(
+    system_information_store: &definitions::SystemInformationStore,
+) {
+    let path = state_file_path(AIS_MANAGER);
+    let (linked, socket_path) = match StatePersistence::load_state(&path).await {
+        Ok(state) => {
+            let now = current_timestamp_wrapper();
+            let age_seconds = now.saturating_sub(state.last_updated);
+            let socket = parse_manager_watchdog_socket(&state.data);
+            let linked = socket.is_some()
+                && age_seconds < STATE_STALE_THRESHOLD_SECONDS
+                && !matches!(state.status, Status::Stopped | Status::Unknown);
+            (linked, socket)
+        }
+        Err(_) => (false, None),
+    };
+
+    let mut guard = system_information_store.write().await;
+    let was_linked = guard.manager_linked;
+    guard.manager_linked = linked;
+
+    if was_linked != linked {
+        if linked {
+            log!(
+                LogLevel::Info,
+                "Manager marked linked via state file marker{}",
+                socket_path
+                    .as_deref()
+                    .map(|path| format!(" (socket={})", path))
+                    .unwrap_or_default()
+            );
+        } else {
+            log!(LogLevel::Info, "Manager marked unlinked");
+        }
+    }
+}
+
+fn parse_manager_watchdog_socket(data: &str) -> Option<String> {
+    // Supports either `watchdog_connected:/path` or `watchdog_connected=/path`.
+    for raw_line in data.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some((key, value)) = line.split_once(':').or_else(|| line.split_once('=')) {
+            if key.trim() != MANAGER_WATCHDOG_CONNECTED_PREFIX {
+                continue;
+            }
+            let socket = value.trim();
+            if socket.is_empty() {
+                continue;
+            }
+            return Some(socket.to_string());
+        }
+    }
+
+    None
 }
 
 fn should_track_state(state: &AppState) -> bool {
@@ -641,10 +706,14 @@ fn current_timestamp_wrapper() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{WATCHDOG_DECLARED_DEAD_MESSAGE, mark_state_dead_if_stale};
+    use super::{
+        WATCHDOG_DECLARED_DEAD_MESSAGE, mark_state_dead_if_stale, parse_manager_watchdog_socket,
+    };
     use artisan_middleware::{
-        aggregator::Status, config::AppConfig,
-        dusa_collection_utils::core::version::SoftwareVersion, state_persistence::AppState,
+        aggregator::Status,
+        config::AppConfig,
+        dusa_collection_utils::core::version::SoftwareVersion,
+        state_persistence::AppState,
     };
 
     #[test]
@@ -671,5 +740,19 @@ mod tests {
         assert_eq!(state.pid, 0);
         assert_eq!(state.data, WATCHDOG_DECLARED_DEAD_MESSAGE);
         assert!(!state.stderr.is_empty());
+    }
+
+    #[test]
+    fn parses_manager_watchdog_socket_marker() {
+        assert_eq!(
+            parse_manager_watchdog_socket("watchdog_connected:/tmp/watchdog.sock"),
+            Some("/tmp/watchdog.sock".to_string())
+        );
+        assert_eq!(
+            parse_manager_watchdog_socket("other:1\nwatchdog_connected=/opt/a.sock\n"),
+            Some("/opt/a.sock".to_string())
+        );
+        assert_eq!(parse_manager_watchdog_socket("watchdog_connected:"), None);
+        assert_eq!(parse_manager_watchdog_socket(""), None);
     }
 }

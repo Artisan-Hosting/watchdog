@@ -79,6 +79,7 @@ static SKIPPED_TASKS: Lazy<Mutex<HashMap<&'static str, SkipStats>>> =
 pub async fn monitor_application_states(
     system_status_store: definitions::SystemApplicationStatusStore,
     client_status_store: definitions::ClientApplicationStatusStore,
+    system_information_store: definitions::SystemInformationStore,
     process_store: definitions::ChildProcessArray,
     interval: Duration,
     mut shutdown: watch::Receiver<bool>,
@@ -130,6 +131,8 @@ pub async fn monitor_application_states(
                 );
             }
         }
+
+        state_refresh::refresh_manager_linked_once(&system_information_store).await;
     }
 }
 

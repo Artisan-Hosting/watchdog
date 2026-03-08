@@ -10,6 +10,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     os::fd::AsRawFd,
     process, thread,
+    sync::mpsc,
     time::{Duration, Instant, SystemTime},
 };
 
@@ -27,6 +28,7 @@ use byteorder::{LittleEndian, WriteBytesExt};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use nix::{ioctl_none, ioctl_write_ptr, unistd};
+use once_cell::sync::OnceCell;
 use prost::Message;
 use sha2::Sha256;
 use std::convert::TryFrom;
@@ -49,6 +51,19 @@ const AWDOG_KEY_LEN: usize = 32;
 const AWDOG_MAC_LEN: usize = 32;
 /// Fixed UUID that uniquely identifies the watchdog client to the kernel.
 const AWDOG_MODULE_UUID: [u8; 16] = *b"AWDOGMOD-UUIDv10";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeartbeatFaultMode {
+    None,
+    BadMac,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeartbeatCommand {
+    SetFaultMode(HeartbeatFaultMode),
+}
+
+static HEARTBEAT_COMMAND_TX: OnceCell<mpsc::Sender<HeartbeatCommand>> = OnceCell::new();
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -137,9 +152,12 @@ pub fn start_kernel_watchdog() -> Result<(), ErrorArrayItem> {
     let hb_period = Duration::from_millis(reg.hb_period_ms as u64);
     let hb_key = reg.key;
 
+    let (hb_tx, hb_rx) = mpsc::channel::<HeartbeatCommand>();
+    let _ = HEARTBEAT_COMMAND_TX.set(hb_tx);
+
     thread::Builder::new()
         .name("awdog-heartbeat".into())
-        .spawn(move || run_heartbeat_loop(file, hb_key, pid, exe_fp, hb_period))
+        .spawn(move || run_heartbeat_loop(file, hb_key, pid, exe_fp, hb_period, hb_rx))
         .map_err(ErrorArrayItem::from)?;
 
     Ok(())
@@ -161,12 +179,33 @@ fn run_heartbeat_loop(
     pid: u32,
     exe_fp: u64,
     period: Duration,
+    cmd_rx: mpsc::Receiver<HeartbeatCommand>,
 ) {
     let mut nonce: u64 = 1;
     let mut last_send: Option<Instant> = None;
+    let mut next_send: Instant = Instant::now();
+    let mut fault_mode = HeartbeatFaultMode::None;
 
     loop {
-        let hb = build_hb(&kc, nonce, pid, exe_fp);
+        let now = Instant::now();
+        let timeout = next_send.saturating_duration_since(now);
+        match cmd_rx.recv_timeout(timeout) {
+            Ok(HeartbeatCommand::SetFaultMode(mode)) => {
+                fault_mode = mode;
+                // Switch immediately; don't wait for the normal cadence.
+                next_send = Instant::now();
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {}
+        }
+
+        let mut hb = build_hb(&kc, nonce, pid, exe_fp);
+        if fault_mode == HeartbeatFaultMode::BadMac {
+            // Intentionally corrupt the MAC so the kernel module rejects the heartbeat
+            // and trips with reason=verify-failed.
+            hb.mac[0] ^= 0xFF;
+        }
         let hb_bytes = unsafe {
             std::slice::from_raw_parts(
                 (&hb as *const AwdogHb) as *const u8,
@@ -206,7 +245,7 @@ fn run_heartbeat_loop(
         }
 
         nonce = nonce.wrapping_add(1);
-        thread::sleep(period);
+        next_send = Instant::now() + period;
     }
 
     unsafe {
@@ -218,6 +257,29 @@ fn run_heartbeat_loop(
             );
         }
     }
+}
+
+/// Requests that the kernel watchdog client intentionally send malformed heartbeats.
+///
+/// This is intended as a controlled "trip" path: the kernel module will reject the
+/// heartbeat and initiate its reboot flow (typically reason=verify-failed).
+pub fn request_intentional_trip() -> Result<(), ErrorArrayItem> {
+    let tx = HEARTBEAT_COMMAND_TX.get().ok_or_else(|| {
+        ErrorArrayItem::new(
+            Errors::GeneralError,
+            "Kernel watchdog heartbeat thread is not running".to_string(),
+        )
+    })?;
+
+    tx.send(HeartbeatCommand::SetFaultMode(HeartbeatFaultMode::BadMac))
+        .map_err(|err| {
+            ErrorArrayItem::new(
+                Errors::GeneralError,
+                format!("Failed to signal kernel watchdog trip mode: {err}"),
+            )
+        })?;
+
+    Ok(())
 }
 
 /// HKDF helper that derives the per-session key used to authenticate heartbeats.

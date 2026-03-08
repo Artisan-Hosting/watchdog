@@ -47,6 +47,7 @@ pub mod pid_persistence;
 pub mod runtime_flags;
 pub mod scripts;
 pub mod security_trip;
+mod intentional_trip;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), ErrorArrayItem> {
@@ -144,6 +145,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
         {
             let system_status_store = system_application_status_store.clone();
             let client_status_store = client_application_status_store.clone();
+            let system_info_store = system_information_store.clone();
             let process_store = system_process_store.clone();
             let shutdown = shutdown_rx.clone();
             log!(LogLevel::Debug, "Launching application state monitor task");
@@ -152,6 +154,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
                 monitor_application_states(
                     system_status_store,
                     client_status_store,
+                    system_info_store,
                     process_store,
                     Duration::from_secs(2),
                     shutdown,
@@ -807,6 +810,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
     {
         let mut term = signal(SignalKind::terminate()).map_err(ErrorArrayItem::from)?;
         let mut interrupt = signal(SignalKind::interrupt()).map_err(ErrorArrayItem::from)?;
+        let mut usr1 = signal(SignalKind::user_defined1()).map_err(ErrorArrayItem::from)?;
 
         tokio::select! {
             _ = term.recv() => {
@@ -814,6 +818,9 @@ async fn main() -> Result<(), ErrorArrayItem> {
             }
             _ = interrupt.recv() => {
                 log!(LogLevel::Info, "Received SIGINT; beginning shutdown");
+            }
+            _ = usr1.recv() => {
+                log!(LogLevel::Info, "Received SIGUSR1; beginning shutdown");
             }
         }
     }

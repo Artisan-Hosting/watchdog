@@ -1,20 +1,24 @@
-Flags to add
+Ais status 
 
---no-build       // Spawns the watchdog and automatically uses the vetted / fallback path instead of trying to pull and compile new versions of the app
---insecure       // skips the kernel driver registration and hash integrity checks on startup
---no-kernel      // keeps the hash check but doesn't register with the kernel driver
---no-hash        // keeps the kernel driver in check but doesn't trip it if the hash checks fail
---no-clean       // skips the cargo clean commands once builds are complete (Client apps are exempt, they always need to be clean)
---dummy-ebpf     // forces the application to initialize using the dummy ebpf module even when the platform support the full once
---ledger-awol    // forces the database for the ledger to run with no WAL, it'll be rough on io but good for ledger spot checks
---yap-level X    // a way to set the log mode at calltime using the set_log_level() functions
+App: ais_18da5793
+Status: Unknown
+CPU: 5.31%
+Mem: 216.43 MB
+Net RX: 2484000 B
+Net TX: 251041500 B
 
---client-root    // ignore the forces uid and gid 33 param, and spawn the client applications as the same user we run as
---mock-system    // List system applications that we've validated can be run on this system without building or spawning them, provide some dummy metrics, and keep the status as unknown 
---mock-client    // List client applications that we've validated can be run on this system without building or spawning them, provide some dummy metrics, and keep the status as unknown 
---mock-all       // List All applications that we've validated can be run on this system without building or spawning them, provide some dummy metrics, and keep the status as unknown
---kill-on-drop   // If we fail attempting to re-attach to an orphaned child, run a pkill on the tracked pid then drop it from all stores.
 
-Implemtation notes, This is only meant to be present in debug builds of the application, when any of these flags are passed,
-the application should always report its status as tripped and a note like 'DEV arguments passed'. With no arguments passed
-a debug build should still show the security as tripped aswell
+Siege result 
+
+Transactions:		    12000    hits
+Availability:		      100.00 %
+Elapsed time:		      104.71 secs
+Data transferred:	      235.03 MB
+Response time:		      129.20 ms
+Transaction rate:	      114.60 trans/sec
+Throughput:		        2.24 MB/sec
+Concurrency:		       14.81
+Successful transactions:    12000
+Failed transactions:	        0
+Longest transaction:	     1220.00 ms
+Shortest transaction:	       40.00 ms
