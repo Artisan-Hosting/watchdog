@@ -1,8 +1,7 @@
 //! Runtime monitoring and process-control functions exposed to gRPC handlers.
 
-use crate::functions::inventory::generate_safe_client_runner_list;
 use crate::{
-    definitions::{self, ARTISAN_BIN_DIR, ApplicationStatus, SupervisedProcesses},
+    definitions::{self, ARTISAN_BIN_DIR, ARTISAN_CONF_DIR, ApplicationStatus, SupervisedProcesses},
     ebpf, ledger, pid_persistence,
     scripts::{build_application, build_runner_binary, revert_to_vetted},
 };
@@ -81,6 +80,7 @@ pub async fn monitor_application_states(
     client_status_store: definitions::ClientApplicationStatusStore,
     system_information_store: definitions::SystemInformationStore,
     process_store: definitions::ChildProcessArray,
+    client_inventory_store: definitions::ClientInventoryStore,
     interval: Duration,
     mut shutdown: watch::Receiver<bool>,
 ) {
@@ -118,7 +118,11 @@ pub async fn monitor_application_states(
             }
         }
 
-        match state_refresh::refresh_client_statuses_once(&client_status_store, &process_store)
+        match state_refresh::refresh_client_statuses_once(
+            &client_status_store,
+            &process_store,
+            &client_inventory_store,
+        )
             .await
         {
             Ok(_) => clear_skip_streak("state_refresh_client").await,
@@ -858,9 +862,10 @@ fn prepare_client_runtime_directories(run_as_www_data: bool) {
 pub async fn start_application_stub(
     application: &str,
     stores: &[ProcessStoreHandle],
+    client_inventory_store: &definitions::ClientInventoryStore,
 ) -> Result<CommandStubResult, ErrorArrayItem> {
     let Some((resolved_application, is_system_app)) =
-        resolve_start_application(application).await?
+        resolve_start_application(application, client_inventory_store).await?
     else {
         return Ok(CommandStubResult::new(
             false,
@@ -908,6 +913,7 @@ pub async fn start_application_stub(
 
 async fn resolve_start_application(
     requested: &str,
+    client_inventory_store: &definitions::ClientInventoryStore,
 ) -> Result<Option<(String, bool)>, ErrorArrayItem> {
     let input = requested.trim();
     if input.is_empty() {
@@ -920,7 +926,11 @@ async fn resolve_start_application(
         }
     }
 
-    let safe_clients = generate_safe_client_runner_list().await?;
+    let safe_clients = {
+        let guard = client_inventory_store.read().await;
+        guard.safe_clients.clone()
+    };
+
     if safe_clients.contains(&input.to_string()) {
         return Ok(Some((input.to_string(), false)));
     }
@@ -943,7 +953,7 @@ async fn start_with_handle(
 ) -> Result<CommandStubResult, ErrorArrayItem> {
     let origin = handle.kind();
     let binary_path = PathType::Content(format!("{}/{}", ARTISAN_BIN_DIR, application));
-    let working_dir = PathType::Content(format!("/etc/{}", application));
+    let working_dir = PathType::Content(format!("{}/{}", ARTISAN_CONF_DIR, application));
 
     if !binary_path.exists() {
         return Ok(CommandStubResult::new(
@@ -1170,6 +1180,7 @@ pub async fn reload_application_stub(
 pub async fn rebuild_application_stub(
     application: &str,
     _stores: &[ProcessStoreHandle],
+    client_inventory_store: &definitions::ClientInventoryStore,
 ) -> Result<CommandStubResult, ErrorArrayItem> {
     '_system_rebuild_path: {
         if definitions::CRITICAL_APPLICATIONS
@@ -1218,8 +1229,25 @@ pub async fn rebuild_application_stub(
     }
 
     '_client_rebuild_path: {
-        let client_applications = generate_safe_client_runner_list().await?;
-        if !client_applications.contains(&application.to_string()) {
+        let safe_clients = {
+            let guard = client_inventory_store.read().await;
+            guard.safe_clients.clone()
+        };
+
+        let resolved = if safe_clients.contains(&application.to_string()) {
+            application.to_string()
+        } else if !application.starts_with("ais_") {
+            let prefixed = format!("ais_{}", application);
+            if safe_clients.contains(&prefixed) {
+                prefixed
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        if resolved.is_empty() {
             return Ok(CommandStubResult::new(
                 false,
                 format!(
@@ -1228,33 +1256,36 @@ pub async fn rebuild_application_stub(
             ));
         }
 
-        log!(LogLevel::Info, "Rebuilding client runner: {}", application);
-        let runner_name = application.to_string();
+        log!(LogLevel::Info, "Rebuilding client runner: {}", resolved);
+        let runner_name = resolved;
         return match build_runner_binary(&runner_name).await {
             Ok(_) => Ok(CommandStubResult::new(
                 true,
-                format!("[stub] rebuild command completed for client app {application}"),
+                format!(
+                    "[stub] rebuild command completed for client app {}",
+                    runner_name
+                ),
             )),
             Err(err) => {
                 log!(
                     LogLevel::Error,
                     "Failed to rebuild client app {}: {}",
-                    application,
+                    runner_name,
                     err.err_mesg
                 );
-                let runner_name = application.to_string();
                 if let Err(fallback_err) = revert_to_vetted(&runner_name).await {
                     log!(
                         LogLevel::Error,
                         "Failed to fallback to vetted binary for {}: {}",
-                        application,
+                        runner_name,
                         fallback_err.err_mesg
                     );
                 }
                 Ok(CommandStubResult::new(
                     false,
                     format!(
-                        "[stub] rebuild command failed for client app {application}: {}",
+                        "[stub] rebuild command failed for client app {}: {}",
+                        runner_name,
                         err.err_mesg
                     ),
                 ))

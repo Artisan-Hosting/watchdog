@@ -42,6 +42,7 @@ use proto::{
 pub async fn serve_watchdog(
     system_application_status_store: definitions::SystemApplicationStatusStore,
     client_application_status_store: definitions::ClientApplicationStatusStore,
+    client_inventory_store: definitions::ClientInventoryStore,
     build_status_store: definitions::BuildStatusStore,
     verification_status_store: definitions::VerificationStatusStore,
     system_information_store: definitions::SystemInformationStore,
@@ -66,6 +67,7 @@ pub async fn serve_watchdog(
     let service = WatchdogService::new(
         system_application_status_store,
         client_application_status_store,
+        client_inventory_store,
         build_status_store,
         verification_status_store,
         system_information_store,
@@ -101,6 +103,7 @@ pub async fn serve_watchdog(
 struct WatchdogService {
     system_application_status_store: definitions::SystemApplicationStatusStore,
     client_application_status_store: definitions::ClientApplicationStatusStore,
+    client_inventory_store: definitions::ClientInventoryStore,
     build_status_store: definitions::BuildStatusStore,
     verification_status_store: definitions::VerificationStatusStore,
     system_information_store: definitions::SystemInformationStore,
@@ -111,6 +114,7 @@ impl WatchdogService {
     fn new(
         system_application_status_store: definitions::SystemApplicationStatusStore,
         client_application_status_store: definitions::ClientApplicationStatusStore,
+        client_inventory_store: definitions::ClientInventoryStore,
         build_status_store: definitions::BuildStatusStore,
         verification_status_store: definitions::VerificationStatusStore,
         system_information_store: definitions::SystemInformationStore,
@@ -123,6 +127,7 @@ impl WatchdogService {
         Self {
             system_application_status_store,
             client_application_status_store,
+            client_inventory_store,
             build_status_store,
             verification_status_store,
             system_information_store,
@@ -438,8 +443,12 @@ impl Watchdog for WatchdogService {
             Some(payload) => match payload {
                 Payload::Start(start_command) => {
                     let application = start_command.application;
-                    match functions::start_application_stub(&application, &self.process_handles)
-                        .await
+                    match functions::start_application_stub(
+                        &application,
+                        &self.process_handles,
+                        &self.client_inventory_store,
+                    )
+                    .await
                     {
                         Ok(result) => (result.accepted, result.message),
                         Err(err) => {
@@ -509,10 +518,17 @@ impl Watchdog for WatchdogService {
                     let application = rebuild_command.application;
                     let stores = self.process_handles.clone();
                     let build_store = self.build_status_store.clone();
+                    let inventory_store = self.client_inventory_store.clone();
                     let queued_application = application.clone();
 
                     tokio::spawn(async move {
-                        match functions::rebuild_application_stub(&application, &stores).await {
+                        match functions::rebuild_application_stub(
+                            &application,
+                            &stores,
+                            &inventory_store,
+                        )
+                        .await
+                        {
                             Ok(result) => {
                                 let status = if result.accepted {
                                     definitions::BuildStatus::success(application.clone(), false)

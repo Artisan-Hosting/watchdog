@@ -26,10 +26,12 @@ use tokio::task::{JoinHandle, JoinSet};
 use crate::{
     definitions::{self as defs, ARTISAN_BIN_DIR, ARTISAN_CONF_DIR, CRITICAL_APPLICATIONS},
     functions::{
-        configure_client_runtime_command, generate_safe_client_runner_list,
-        monitor_application_states, monitor_runtime_health, persist_shutdown_integrity_manifest,
-        verify_startup_integrity,
+        configure_client_runtime_command,
+        monitor_application_states, monitor_client_inventory, monitor_runtime_health,
+        persist_shutdown_integrity_manifest,
+        refresh_client_inventory_once, verify_startup_integrity,
     },
+    intentional_trip::run_intentional_trip_routine,
     runtime_flags::runtime_flags,
     scripts::{
         build_application, build_runner_binary, clean_cargo_projects, clean_runner_workspace,
@@ -41,13 +43,13 @@ pub mod definitions;
 pub mod ebpf;
 pub mod functions;
 pub mod grpc;
+mod intentional_trip;
 pub mod kernel_watchdog;
 pub mod ledger;
 pub mod pid_persistence;
 pub mod runtime_flags;
 pub mod scripts;
 pub mod security_trip;
-mod intentional_trip;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), ErrorArrayItem> {
@@ -105,10 +107,12 @@ async fn main() -> Result<(), ErrorArrayItem> {
     let verification_status_store = defs::new_verification_status_store();
     let system_information_store = defs::new_system_information_store();
     let system_process_store = defs::new_child_process_array();
+    let client_inventory_store = defs::new_client_inventory_store();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let mut state_monitor_task: Option<JoinHandle<()>> = None;
     let mut runtime_monitor_task: Option<JoinHandle<()>> = None;
+    let mut inventory_monitor_task: Option<JoinHandle<()>> = None;
     let grpc_task: JoinHandle<()>;
 
     match security_trip::refresh_startup_trip_status(&system_information_store).await {
@@ -123,9 +127,35 @@ async fn main() -> Result<(), ErrorArrayItem> {
     }
     apply_debug_security_marker(&system_information_store).await;
 
-    pid_persistence::initialise().await?;
-    pid_persistence::reclaim_orphan_processes().await?;
-    ledger::initialise().await?;
+    if let Err(err) = pid_persistence::initialise().await {
+        fatal_trip(
+            &format!("pid persistence initialize failed: {}", err.err_mesg),
+            &system_information_store,
+        )
+        .await;
+    }
+    if let Err(err) = pid_persistence::reclaim_orphan_processes().await {
+        fatal_trip(
+            &format!("pid persistence reclaim failed: {}", err.err_mesg),
+            &system_information_store,
+        )
+        .await;
+    }
+    if let Err(err) = ledger::initialise().await {
+        fatal_trip(
+            &format!("ledger initialize failed: {}", err.err_mesg),
+            &system_information_store,
+        )
+        .await;
+    }
+
+    if let Err(err) = refresh_client_inventory_once(&client_inventory_store).await {
+        log!(
+            LogLevel::Warn,
+            "Initial client inventory scan failed; client placeholders may be delayed: {}",
+            err.err_mesg
+        );
+    }
 
     if ebpf::manager().is_active() {
         log!(LogLevel::Info, "eBPF network tracking is active");
@@ -147,6 +177,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
             let client_status_store = client_application_status_store.clone();
             let system_info_store = system_information_store.clone();
             let process_store = system_process_store.clone();
+            let inventory_store = client_inventory_store.clone();
             let shutdown = shutdown_rx.clone();
             log!(LogLevel::Debug, "Launching application state monitor task");
             state_monitor_task = Some(tokio::spawn(async move {
@@ -156,6 +187,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
                     client_status_store,
                     system_info_store,
                     process_store,
+                    inventory_store,
                     Duration::from_secs(2),
                     shutdown,
                 )
@@ -182,11 +214,31 @@ async fn main() -> Result<(), ErrorArrayItem> {
                 .await;
             }));
         }
+
+        {
+            let inventory_store = client_inventory_store.clone();
+            let client_status_store = client_application_status_store.clone();
+            let build_store = build_status_store.clone();
+            let shutdown = shutdown_rx.clone();
+            log!(LogLevel::Debug, "Launching client inventory monitor task");
+            inventory_monitor_task = Some(tokio::spawn(async move {
+                log!(LogLevel::Trace, "Client inventory monitor loop started");
+                monitor_client_inventory(
+                    inventory_store,
+                    client_status_store,
+                    build_store,
+                    Duration::from_secs(3),
+                    shutdown,
+                )
+                .await;
+            }));
+        }
     }
 
     {
         let system_store = system_application_status_store.clone();
         let client_store = client_application_status_store.clone();
+        let inventory_store = client_inventory_store.clone();
         let build_store = build_status_store.clone();
         let verification_store = verification_status_store.clone();
         let system_info_store = system_information_store.clone();
@@ -198,6 +250,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
             if let Err(err) = grpc::serve_watchdog(
                 system_store,
                 client_store,
+                inventory_store,
                 build_store,
                 verification_store,
                 system_info_store,
@@ -238,7 +291,16 @@ async fn main() -> Result<(), ErrorArrayItem> {
                 defs::WATCHDOG_INTEGRITY_ROOTS.len()
             );
 
-            let verification_report = verify_startup_integrity().await?;
+            let verification_report = match verify_startup_integrity().await {
+                Ok(report) => report,
+                Err(err) => {
+                    fatal_trip(
+                        &format!("startup integrity verification failed: {}", err.err_mesg),
+                        &system_information_store,
+                    )
+                    .await;
+                }
+            };
 
             for entry in &verification_report.entries {
                 if entry.verified {
@@ -264,10 +326,11 @@ async fn main() -> Result<(), ErrorArrayItem> {
                         "Integrity discrepancies detected but runtime flags suppressed panic/trip"
                     );
                 } else {
-                    panic!(
+                    let reason = format!(
                         "Startup integrity verification failed with {} discrepancies",
                         verification_report.discrepancies.len()
                     );
+                    fatal_trip(&reason, &system_information_store).await;
                 }
             }
         }
@@ -281,7 +344,6 @@ async fn main() -> Result<(), ErrorArrayItem> {
             );
             let system_apps: Vec<String> = defs::CRITICAL_APPLICATIONS
                 .iter()
-                .filter(|app| app.canonical != "welcome")
                 .map(|app| app.ais.to_string())
                 .collect();
             seed_mock_statuses(
@@ -561,16 +623,9 @@ async fn main() -> Result<(), ErrorArrayItem> {
     }
 
     // Shared list reused for build + spawn so we don't drift between passes.
-    let client_applications = match generate_safe_client_runner_list().await {
-        Ok(data) => data,
-        Err(err) => {
-            log!(
-                LogLevel::Error,
-                "Failed to compile safe runner list: {}",
-                err.err_mesg
-            );
-            Vec::new()
-        }
+    let client_applications = {
+        let guard = client_inventory_store.read().await;
+        guard.safe_clients.clone()
     };
 
     '_building_client_runners: {
@@ -808,9 +863,36 @@ async fn main() -> Result<(), ErrorArrayItem> {
 
     #[cfg(unix)]
     {
-        let mut term = signal(SignalKind::terminate()).map_err(ErrorArrayItem::from)?;
-        let mut interrupt = signal(SignalKind::interrupt()).map_err(ErrorArrayItem::from)?;
-        let mut usr1 = signal(SignalKind::user_defined1()).map_err(ErrorArrayItem::from)?;
+        let mut term = match signal(SignalKind::terminate()) {
+            Ok(handle) => handle,
+            Err(err) => {
+                fatal_trip(
+                    &format!("failed to register SIGTERM handler: {err}"),
+                    &system_information_store,
+                )
+                .await;
+            }
+        };
+        let mut interrupt = match signal(SignalKind::interrupt()) {
+            Ok(handle) => handle,
+            Err(err) => {
+                fatal_trip(
+                    &format!("failed to register SIGINT handler: {err}"),
+                    &system_information_store,
+                )
+                .await;
+            }
+        };
+        let mut usr1 = match signal(SignalKind::user_defined1()) {
+            Ok(handle) => handle,
+            Err(err) => {
+                fatal_trip(
+                    &format!("failed to register SIGUSR1 handler: {err}"),
+                    &system_information_store,
+                )
+                .await;
+            }
+        };
 
         tokio::select! {
             _ = term.recv() => {
@@ -827,7 +909,13 @@ async fn main() -> Result<(), ErrorArrayItem> {
 
     #[cfg(not(unix))]
     {
-        ctrl_c().await.map_err(ErrorArrayItem::from)?;
+        if let Err(err) = ctrl_c().await {
+            fatal_trip(
+                &format!("failed to register ctrl-c handler: {err}"),
+                &system_information_store,
+            )
+            .await;
+        }
         log!(
             LogLevel::Info,
             "Received termination signal (ctrl-c); beginning shutdown"
@@ -849,6 +937,9 @@ async fn main() -> Result<(), ErrorArrayItem> {
     if let Some(handle) = runtime_monitor_task.take() {
         shutdown_background_task("runtime health monitor", handle, Duration::from_secs(2)).await;
     }
+    if let Some(handle) = inventory_monitor_task.take() {
+        shutdown_background_task("client inventory monitor", handle, Duration::from_secs(2)).await;
+    }
     shutdown_background_task("gRPC server", grpc_task, Duration::from_secs(3)).await;
 
     if let Err(err) = persist_shutdown_integrity_manifest().await {
@@ -862,6 +953,26 @@ async fn main() -> Result<(), ErrorArrayItem> {
     log!(LogLevel::Debug, "Shutdown signal handled; exiting main");
 
     Ok(())
+}
+
+async fn fatal_trip(reason: &str, system_information_store: &defs::SystemInformationStore) -> ! {
+    log!(
+        LogLevel::Error,
+        "Fatal watchdog error encountered; requesting intentional trip: {}",
+        reason
+    );
+
+    if let Err(err) = run_intentional_trip_routine(reason, system_information_store).await {
+        log!(
+            LogLevel::Error,
+            "Intentional trip routine failed; entering fail-stop loop: {}",
+            err.err_mesg
+        );
+    }
+
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }
 }
 
 async fn terminate_process_monitors(process_store: &defs::ChildProcessArray) {
