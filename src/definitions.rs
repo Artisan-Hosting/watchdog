@@ -235,6 +235,20 @@ pub type VerificationStatusStore = Arc<RwLock<Vec<VerificationEntry>>>;
 pub type SystemInformationStore = Arc<RwLock<ArtisanSystemInformation>>;
 pub type ChildProcessArray = Arc<LockWithTimeout<HashMap<String, SupervisedProcesses>>>;
 
+#[derive(Debug, Clone, Default)]
+pub struct ClientInventorySnapshot {
+    /// All clients present in git credentials (e.g. `ais_<git_id>`), regardless of config state.
+    pub expected_clients: Vec<String>,
+    /// Clients considered safe to build/spawn because they have valid TOML config in `ARTISAN_CONF_DIR`.
+    pub safe_clients: Vec<String>,
+    /// Last time the inventory scan ran (epoch seconds).
+    pub last_scan: u64,
+    /// Last build attempt time (epoch seconds) per client application.
+    pub last_build_attempt: HashMap<String, u64>,
+}
+
+pub type ClientInventoryStore = Arc<RwLock<ClientInventorySnapshot>>;
+
 pub fn new_application_status_store() -> ApplicationStatusStore {
     Arc::new(RwLock::new(HashMap::new()))
 }
@@ -263,6 +277,10 @@ pub fn new_system_information_store() -> SystemInformationStore {
 
 pub fn new_child_process_array() -> ChildProcessArray {
     Arc::new(LockWithTimeout::new(HashMap::new()))
+}
+
+pub fn new_client_inventory_store() -> ClientInventoryStore {
+    Arc::new(RwLock::new(ClientInventorySnapshot::default()))
 }
 
 pub fn rolling_buffer_from_entries(entries: Vec<(u64, String)>) -> RollingBuffer {
