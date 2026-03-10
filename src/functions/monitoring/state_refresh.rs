@@ -77,8 +77,26 @@ pub(super) async fn refresh_system_statuses_once(
         }
         let observations = collect_process_observations(process_store, app.ais).await?;
 
-        let app_status = merge_state_and_observations(state, observations, true)
-            .expect("system applications should always produce a status");
+        let app_status = match merge_state_and_observations(state, observations, true) {
+            Some(status) => status,
+            None => {
+                log!(
+                    LogLevel::Warn,
+                    "System application {} produced no state/observations; marking Unknown",
+                    app.ais
+                );
+                ApplicationStatus::new(
+                    Status::Unknown,
+                    0.0,
+                    0.0,
+                    None,
+                    current_timestamp_wrapper(),
+                    definitions::empty_output_buffer(),
+                    definitions::empty_output_buffer(),
+                    None,
+                )
+            }
+        };
         persist_application_logs(app.ais, &app_status).await;
 
         new_statuses.insert(app.ais.to_string(), app_status);
@@ -157,6 +175,7 @@ pub(super) async fn refresh_system_statuses_once(
 pub(super) async fn refresh_client_statuses_once(
     client_store: &definitions::ClientApplicationStatusStore,
     process_store: &definitions::ChildProcessArray,
+    client_inventory_store: &definitions::ClientInventoryStore,
 ) -> Result<(), ErrorArrayItem> {
     let process_names: Vec<String> = {
         let guard = process_store
@@ -251,6 +270,30 @@ pub(super) async fn refresh_client_statuses_once(
                     known_names.insert(ais_name.to_string());
                 }
             }
+        }
+    }
+
+    // Ensure safe-but-stopped applications remain visible even when no process
+    // is running and no `.state` snapshot exists yet.
+    let safe_clients = {
+        let guard = client_inventory_store.read().await;
+        guard.safe_clients.clone()
+    };
+    if !safe_clients.is_empty() {
+        let now = current_timestamp_wrapper();
+        for client in safe_clients {
+            new_statuses.entry(client).or_insert_with(|| {
+                ApplicationStatus::new(
+                    Status::Stopped,
+                    0.0,
+                    0.0,
+                    None,
+                    now,
+                    definitions::empty_output_buffer(),
+                    definitions::empty_output_buffer(),
+                    None,
+                )
+            });
         }
     }
 

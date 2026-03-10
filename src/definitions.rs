@@ -362,7 +362,17 @@ impl Default for ArtisanSystemInformation {
         };
 
         Self {
-            identity: Identifier::load_from_file().unwrap().into(),
+            identity: match Identifier::load_from_file() {
+                Ok(identity) => Some(identity),
+                Err(err) => {
+                    log!(
+                        LogLevel::Warn,
+                        "Failed to load identity file during system info init: {}",
+                        err
+                    );
+                    None
+                }
+            },
             system_apps_initialized: true,
             ip_addrs: ips,
             manager_linked: false,
