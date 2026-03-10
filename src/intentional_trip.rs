@@ -23,6 +23,7 @@ use crate::{
     kernel_watchdog,
 };
 
+#[allow(dead_code)]
 const INTENTIONAL_TRIP_ENV: &str = "AIS_WATCHDOG_INTENTIONAL_TRIP";
 
 /// Parses the env marker used to request an intentional trip.
@@ -31,7 +32,7 @@ const INTENTIONAL_TRIP_ENV: &str = "AIS_WATCHDOG_INTENTIONAL_TRIP";
 /// - unset / empty => no trip
 /// - "1" => trip with a default reason
 /// - any other value => used as the reason string
-pub(crate) fn intentional_trip_marker() -> Option<String> {
+pub(crate) fn _intentional_trip_marker() -> Option<String> {
     let raw = std::env::var(INTENTIONAL_TRIP_ENV).ok()?;
     let value = raw.trim();
     if value.is_empty() {
