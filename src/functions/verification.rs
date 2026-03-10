@@ -21,14 +21,21 @@ use std::{
     fs::{self, File},
     io::{ErrorKind, Read},
     path::{Path, PathBuf},
-    time::Instant,
+    sync::Arc,
+    time::{Duration, Instant},
 };
-use tokio::fs as tokio_fs;
+use tokio::{
+    fs as tokio_fs,
+    sync::{mpsc, watch},
+    task::JoinHandle,
+    time::{self, sleep},
+};
 
-use crate::definitions::{
-    VerificationEntry, WATCHDOG_IGNORE_INTEGRITY_ENV, WATCHDOG_INTEGRITY_MANIFEST_PATH,
-    WATCHDOG_INTEGRITY_ROOTS,
-};
+use dir_watcher::{MonitorMode, Options as WatchOptions, RawFileMonitor, RecursiveMode};
+
+use crate::{definitions::{
+    SystemInformationStore, VerificationEntry, WATCHDOG_IGNORE_INTEGRITY_ENV, WATCHDOG_INTEGRITY_MANIFEST_PATH, WATCHDOG_INTEGRITY_ROOTS
+}, intentional_trip::run_intentional_trip_routine};
 
 const DEBUG_OVERRIDE_ROOTS_ENV: &str = "AIS_WATCHDOG_DEBUG_HASH_ROOTS";
 const DEBUG_OVERRIDE_MANIFEST_PATH_ENV: &str = "AIS_WATCHDOG_DEBUG_HASH_MANIFEST";
@@ -512,4 +519,169 @@ fn compare_manifests(expected: &IntegrityManifest, current: &IntegrityManifest) 
 
     discrepancies.sort();
     discrepancies
+}
+
+/// Watches the integrity roots and continuously recomputes integrity discrepancies
+/// against the persisted manifest. Results are appended to the shared verification
+/// status store under `runtime_integrity_*` entry names.
+pub async fn monitor_runtime_integrity(
+    verification_status_store: crate::definitions::VerificationStatusStore,
+    interval: std::time::Duration,
+    debounce: std::time::Duration,
+    system_information_store: SystemInformationStore,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let roots = monitored_roots();
+    if roots.is_empty() {
+        log!(
+            LogLevel::Warn,
+            "Runtime integrity monitor disabled: no integrity roots configured"
+        );
+        return;
+    }
+
+    let (event_tx, mut event_rx) = mpsc::channel::<()>(4096);
+    let mut monitors: Vec<Arc<RawFileMonitor>> = Vec::new();
+    let mut forwarders: Vec<JoinHandle<()>> = Vec::new();
+
+    for root in roots.iter().cloned() {
+        let mut opts = WatchOptions::default();
+        opts = opts
+            .set_target_dir(PathType::Content(root.clone()))
+            .set_mode(RecursiveMode::Recursive)
+            .set_monitor_mode(MonitorMode::Modify)
+            .set_validation(false)
+            .set_interval(30);
+
+        let monitor = Arc::new(RawFileMonitor::new(opts).await);
+        monitor.start().await;
+
+        let mut rx = match monitor.subscribe().await {
+            Some(rx) => rx,
+            None => {
+                log!(
+                    LogLevel::Warn,
+                    "Runtime integrity monitor could not subscribe to watcher for {}",
+                    root
+                );
+                continue;
+            }
+        };
+
+        let tx = event_tx.clone();
+        forwarders.push(tokio::spawn(async move {
+            while rx.recv().await.is_some() {
+                if tx.send(()).await.is_err() {
+                    break;
+                }
+            }
+        }));
+
+        monitors.push(monitor);
+    }
+
+    if monitors.is_empty() {
+        log!(
+            LogLevel::Warn,
+            "Runtime integrity monitor disabled: no directory watchers started"
+        );
+        return;
+    }
+
+    log!(
+        LogLevel::Info,
+        "Runtime integrity monitor watching {} roots",
+        monitors.len()
+    );
+
+    let mut ticker = time::interval(interval);
+    let mut dirty = true;
+    let mut last_event = Instant::now();
+    let mut current_check: Option<JoinHandle<()>> = None;
+
+    loop {
+        tokio::select! {
+            changed = shutdown.changed() => {
+                match changed {
+                    Ok(_) if *shutdown.borrow() => {
+                        log!(LogLevel::Info, "Runtime integrity monitor shutting down");
+                        break;
+                    }
+                    Ok(_) => continue,
+                    Err(_) => {
+                        log!(
+                            LogLevel::Error,
+                            "Runtime integrity monitor shutting down (sender dropped); requesting intentional trip"
+                        );
+                        if let Err(err) = run_intentional_trip_routine(
+                            "runtime integrity monitor sender dropped",
+                            &system_information_store,
+                        )
+                        .await
+                        {
+                            log!(
+                                LogLevel::Error,
+                                "Intentional trip routine failed; entering fail-stop loop: {}",
+                                err.err_mesg
+                            );
+                        }
+
+                        loop {
+                            sleep(Duration::from_secs(60)).await;
+                        }
+                    }
+                }
+            }
+            _ = event_rx.recv() => {
+                dirty = true;
+                last_event = Instant::now();
+            }
+            _ = ticker.tick() => {
+                if let Some(handle) = current_check.as_mut() {
+                    if handle.is_finished() {
+                        let _ = handle.await;
+                        current_check = None;
+                    }
+                }
+
+                if !dirty || current_check.is_some() || last_event.elapsed() < debounce {
+                    continue;
+                }
+
+                dirty = false;
+                let store = verification_status_store.clone();
+                current_check = Some(tokio::spawn(async move {
+                    let report = match verify_startup_integrity().await {
+                        Ok(report) => report,
+                        Err(err) => {
+                            log!(
+                                LogLevel::Warn,
+                                "Runtime integrity verification failed: {}",
+                                err.err_mesg
+                            );
+                            return;
+                        }
+                    };
+
+                    let runtime_entries: Vec<VerificationEntry> = report
+                        .entries
+                        .into_iter()
+                        .map(|mut entry| {
+                            entry.name = format!("runtime_{}", entry.name);
+                            entry
+                        })
+                        .collect();
+
+                    let mut guard = store.write().await;
+                    guard.retain(|entry| !entry.name.starts_with("runtime_integrity_"));
+                    guard.extend(runtime_entries);
+                }));
+            }
+        }
+    }
+
+    for handle in forwarders {
+        handle.abort();
+        let _ = handle.await;
+    }
 }

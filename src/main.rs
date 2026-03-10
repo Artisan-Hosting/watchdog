@@ -28,7 +28,7 @@ use crate::{
     functions::{
         configure_client_runtime_command,
         monitor_application_states, monitor_client_inventory, monitor_runtime_health,
-        persist_shutdown_integrity_manifest,
+        monitor_runtime_integrity, persist_shutdown_integrity_manifest,
         refresh_client_inventory_once, verify_startup_integrity,
     },
     intentional_trip::run_intentional_trip_routine,
@@ -113,6 +113,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
     let mut state_monitor_task: Option<JoinHandle<()>> = None;
     let mut runtime_monitor_task: Option<JoinHandle<()>> = None;
     let mut inventory_monitor_task: Option<JoinHandle<()>> = None;
+    let mut integrity_monitor_task: Option<JoinHandle<()>> = None;
     let grpc_task: JoinHandle<()>;
 
     match security_trip::refresh_startup_trip_status(&system_information_store).await {
@@ -228,6 +229,24 @@ async fn main() -> Result<(), ErrorArrayItem> {
                     client_status_store,
                     build_store,
                     Duration::from_secs(3),
+                    shutdown,
+                )
+                .await;
+            }));
+        }
+
+        {
+            let verification_store = verification_status_store.clone();
+            let system_info_store = system_information_store.clone();
+            let shutdown = shutdown_rx.clone();
+            log!(LogLevel::Debug, "Launching runtime integrity monitor task");
+            integrity_monitor_task = Some(tokio::spawn(async move {
+                log!(LogLevel::Trace, "Runtime integrity monitor loop started");
+                monitor_runtime_integrity(
+                    verification_store,
+                    Duration::from_secs(2),
+                    Duration::from_secs(2),
+                    system_info_store,
                     shutdown,
                 )
                 .await;
@@ -939,6 +958,9 @@ async fn main() -> Result<(), ErrorArrayItem> {
     }
     if let Some(handle) = inventory_monitor_task.take() {
         shutdown_background_task("client inventory monitor", handle, Duration::from_secs(2)).await;
+    }
+    if let Some(handle) = integrity_monitor_task.take() {
+        shutdown_background_task("runtime integrity monitor", handle, Duration::from_secs(2)).await;
     }
     shutdown_background_task("gRPC server", grpc_task, Duration::from_secs(3)).await;
 

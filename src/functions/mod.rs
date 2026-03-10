@@ -15,5 +15,5 @@ pub use monitoring::{
     stop_application_stub, take_process_by_name,
 };
 pub use verification::{
-    persist_shutdown_integrity_manifest, verify_startup_integrity,
+    monitor_runtime_integrity, persist_shutdown_integrity_manifest, verify_startup_integrity,
 };
