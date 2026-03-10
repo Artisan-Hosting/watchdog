@@ -4,7 +4,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    process::Stdio,
 };
 
 use artisan_middleware::dusa_collection_utils::core::errors::Errors;
@@ -194,18 +193,6 @@ pub(crate) fn run_command_with_env(
     let mut command = Command::new(program);
     command.args(args);
     command.current_dir(current_dir);
-    command.stdin(Stdio::null());
-
-    // Normalize build environment so git/cargo behave consistently under systemd.
-    command.env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
-    command.env("HOME", "/root");
-    command.env("USER", "root");
-    command.env("LOGNAME", "root");
-    command.env("LANG", "C.UTF-8");
-    command.env("LC_ALL", "C.UTF-8");
-    // Avoid interactive auth prompts that would hang the watchdog build job.
-    command.env("GIT_TERMINAL_PROMPT", "0");
-    command.env("RUST_BACKTRACE", "0");
 
     for (key, value) in envs {
         command.env(key, value);
