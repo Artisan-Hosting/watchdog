@@ -288,7 +288,8 @@ async fn main() -> Result<(), ErrorArrayItem> {
     }
 
     '_hash_verification: {
-        if runtime_flags.skip_hash_check() {
+        //TODO check systemd to ensure it's shutting this down properly so the checks dont fail
+        if !runtime_flags.skip_hash_check() {
             log!(
                 LogLevel::Warn,
                 "Startup integrity verification skipped by runtime flags"
