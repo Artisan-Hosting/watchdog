@@ -50,6 +50,11 @@ pub const BUILD_SCRIPT_PATH: &str = "/opt/artisan/scripts/build.sh";
 /// Path to the runner build helper script shipped with the platform.
 pub const BUILD_RUNNER_SCRIPT_PATH: &str = "/opt/artisan/scripts/build_runner.sh";
 
+/// Uid of the `www-data` account client applications run as.
+pub const WWW_DATA_UID: u32 = 33;
+/// Gid of the `www-data` account client applications run as.
+pub const WWW_DATA_GID: u32 = 33;
+
 /// Prefix applied to AIS application crates and binaries.
 pub const AIS_PREFIX: &str = "ais_";
 /// Name of the manager application (without prefix).

@@ -1,7 +1,10 @@
 //! Runtime monitoring and process-control functions exposed to gRPC handlers.
 
 use crate::{
-    definitions::{self, ARTISAN_BIN_DIR, ARTISAN_CONF_DIR, ApplicationStatus, SupervisedProcesses},
+    definitions::{
+        self, ARTISAN_BIN_DIR, ARTISAN_CONF_DIR, ApplicationStatus, SupervisedProcesses,
+        WWW_DATA_GID, WWW_DATA_UID,
+    },
     ebpf, ledger, pid_persistence,
     scripts::{build_application, build_runner_binary, revert_to_vetted},
 };
@@ -41,8 +44,6 @@ mod state_refresh;
 const WWW_DATA_USER: &str = "www-data";
 const WWW_DATA_HOME: &str = "/var/www";
 const WWW_DATA_NVM_DIR: &str = "/var/www/.nvm";
-const WWW_DATA_UID: u32 = 33;
-const WWW_DATA_GID: u32 = 33;
 const ROOT_USER: &str = "root";
 const ROOT_HOME: &str = "/root";
 const CLIENT_CACHE_HOME: &str = "/var/www/.cache/ais_watchdog";

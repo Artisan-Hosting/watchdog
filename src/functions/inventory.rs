@@ -215,7 +215,7 @@ fn validate_client_config_dir(ais_name: &str) -> Result<bool, io::Error> {
     Ok(is_valid_toml_file(&config_path)? && is_valid_toml_file(&overrides_path)?)
 }
 
-fn resolve_overrides_path(config_dir: &Path) -> Option<PathBuf> {
+pub(crate) fn resolve_overrides_path(config_dir: &Path) -> Option<PathBuf> {
     let correct = config_dir.join("Overrides.toml");
     if correct.is_file() {
         return Some(correct);

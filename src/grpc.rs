@@ -11,6 +11,7 @@ use artisan_middleware::{
 };
 use tokio::net::UnixListener;
 use tokio::sync::watch;
+use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnixListenerStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
@@ -30,13 +31,16 @@ pub mod proto {
 use proto::{
     ApplicationStatusList, ApplicationStatusMessage, ApplicationStatusRequest,
     ApplicationStatusResponse, BuildStatusList, BuildStatusMessage, CommandRequest,
-    CommandResponse, CurrentLogsRequest, CurrentLogsResponse, Empty,
-    HistoricalLogRecord as HistoricalLogRecordMessage, HistoricalLogsRequest,
-    HistoricalLogsResponse, LogStream, NetworkUsageMessage, SecurityTripStatus, StdLogEntry,
-    SystemInfo, UsageQueryRequest, UsageQueryResponse, VerificationEntryList,
-    VerificationEntryMessage, VersionInfo,
+    CommandResponse, CurrentLogsRequest, CurrentLogsResponse, Empty, ExpectedAppsList,
+    GetConfigFileRequest, GetConfigFileResponse, HistoricalLogRecord as HistoricalLogRecordMessage,
+    HistoricalLogsRequest, HistoricalLogsResponse, LogStream, NetworkUsageMessage,
+    SecurityTripStatus, SetConfigFileRequest, SetConfigFileResponse, StdLogEntry, SystemInfo,
+    UsageQueryRequest, UsageQueryResponse, VerificationEntryList, VerificationEntryMessage,
+    VersionInfo,
     watchdog_server::{Watchdog, WatchdogServer},
 };
+
+use crate::functions::config_files;
 
 /// Starts the watchdog gRPC server on the configured Unix socket path.
 pub async fn serve_watchdog(
@@ -60,8 +64,17 @@ pub async fn serve_watchdog(
     }
 
     let incoming = '_bind_socket: {
-        let listener = UnixListener::bind(socket_path)?;
-        break '_bind_socket UnixListenerStream::new(listener);
+        // Root-only socket: mask group/other bits during bind (avoids a chmod
+        // race), then pin permissions explicitly.
+        let previous_umask = nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o177));
+        let bind_result = UnixListener::bind(socket_path);
+        nix::sys::stat::umask(previous_umask);
+        let listener = bind_result?;
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))?;
+        }
+        break '_bind_socket UnixListenerStream::new(listener).filter(root_only_connection);
     };
 
     let service = WatchdogService::new(
@@ -98,6 +111,32 @@ pub async fn serve_watchdog(
     }
 
     Ok(())
+}
+
+/// SO_PEERCRED gate: only root may talk to the watchdog control socket.
+fn root_only_connection(conn: &std::io::Result<tokio::net::UnixStream>) -> bool {
+    match conn {
+        Ok(stream) => match stream.peer_cred() {
+            Ok(cred) if cred.uid() == 0 => true,
+            Ok(cred) => {
+                log!(
+                    LogLevel::Warn,
+                    "Rejected watchdog socket connection from uid {}",
+                    cred.uid()
+                );
+                false
+            }
+            Err(err) => {
+                log!(
+                    LogLevel::Warn,
+                    "Rejected watchdog socket connection; peer credentials unavailable: {}",
+                    err
+                );
+                false
+            }
+        },
+        Err(_) => true,
+    }
 }
 
 struct WatchdogService {
@@ -154,6 +193,32 @@ impl WatchdogService {
         }
 
         None
+    }
+
+    /// Re-scans git credentials and reports whether `name` is a known application.
+    async fn application_is_expected(&self, name: &str) -> bool {
+        if definitions::CRITICAL_APPLICATIONS
+            .iter()
+            .any(|app| app.ais == name)
+        {
+            return true;
+        }
+
+        if let Err(err) =
+            functions::refresh_client_inventory_once(&self.client_inventory_store).await
+        {
+            log!(
+                LogLevel::Warn,
+                "Inventory refresh failed; checking cached snapshot: {}",
+                err.err_mesg
+            );
+        }
+
+        let snapshot = self.client_inventory_store.read().await;
+        snapshot
+            .expected_clients
+            .iter()
+            .any(|client| client == name)
     }
 }
 
@@ -430,6 +495,130 @@ impl Watchdog for WatchdogService {
                 sample_count: 0,
             })),
             Err(err) => Err(Status::internal(err.err_mesg.to_string())),
+        }
+    }
+
+    async fn list_expected_apps(
+        &self,
+        _request: Request<Empty>,
+    ) -> Result<Response<ExpectedAppsList>, Status> {
+        if let Err(err) =
+            functions::refresh_client_inventory_once(&self.client_inventory_store).await
+        {
+            log!(
+                LogLevel::Warn,
+                "Expected-apps refresh failed; serving cached inventory: {}",
+                err.err_mesg
+            );
+        }
+
+        let snapshot = self.client_inventory_store.read().await;
+        Ok(Response::new(ExpectedAppsList {
+            expected: snapshot.expected_clients.clone(),
+            safe: snapshot.safe_clients.clone(),
+            last_scan: snapshot.last_scan,
+        }))
+    }
+
+    async fn get_config_file(
+        &self,
+        request: Request<GetConfigFileRequest>,
+    ) -> Result<Response<GetConfigFileResponse>, Status> {
+        let msg = request.into_inner();
+        let kind = config_files::ConfigFileKind::from_proto(msg.kind)
+            .ok_or_else(|| Status::invalid_argument("config file kind is required"))?;
+        config_files::validate_ais_name(&msg.application)
+            .map_err(|err| Status::invalid_argument(err.err_mesg.to_string()))?;
+
+        if msg.create_if_missing && !self.application_is_expected(&msg.application).await {
+            return Err(Status::failed_precondition(format!(
+                "{} is not present in git credentials; cannot scaffold its config",
+                msg.application
+            )));
+        }
+
+        let read = config_files::read_config_file_managed(
+            &config_files::conf_dir(),
+            &msg.application,
+            kind,
+            msg.create_if_missing,
+        )
+        .await
+        .map_err(|err| Status::internal(err.err_mesg.to_string()))?;
+
+        if read.created {
+            if let Err(err) =
+                functions::refresh_client_inventory_once(&self.client_inventory_store).await
+            {
+                log!(
+                    LogLevel::Warn,
+                    "Inventory refresh failed after scaffolding {}: {}",
+                    msg.application,
+                    err.err_mesg
+                );
+            }
+        }
+
+        Ok(Response::new(GetConfigFileResponse {
+            found: read.found,
+            created: read.created,
+            path: read.path.display().to_string(),
+            content: read.content,
+            sha256: read.sha256,
+        }))
+    }
+
+    async fn set_config_file(
+        &self,
+        request: Request<SetConfigFileRequest>,
+    ) -> Result<Response<SetConfigFileResponse>, Status> {
+        let msg = request.into_inner();
+        let kind = config_files::ConfigFileKind::from_proto(msg.kind)
+            .ok_or_else(|| Status::invalid_argument("config file kind is required"))?;
+        config_files::validate_ais_name(&msg.application)
+            .map_err(|err| Status::invalid_argument(err.err_mesg.to_string()))?;
+
+        let expected_sha = (!msg.expected_previous_sha256.is_empty())
+            .then_some(msg.expected_previous_sha256.as_str());
+
+        match config_files::write_config_file_managed(
+            &config_files::conf_dir(),
+            &msg.application,
+            kind,
+            &msg.content,
+            expected_sha,
+        )
+        .await
+        {
+            Ok(result) => {
+                log!(
+                    LogLevel::Info,
+                    "Config write: app={} file={} backup={}",
+                    msg.application,
+                    result.path.display(),
+                    result.backup_file.as_deref().unwrap_or("none")
+                );
+                if let Err(err) =
+                    functions::refresh_client_inventory_once(&self.client_inventory_store).await
+                {
+                    log!(
+                        LogLevel::Warn,
+                        "Inventory refresh failed after config write for {}: {}",
+                        msg.application,
+                        err.err_mesg
+                    );
+                }
+                Ok(Response::new(SetConfigFileResponse {
+                    accepted: true,
+                    message: format!("wrote {}", result.path.display()),
+                    backup_file: result.backup_file.unwrap_or_default(),
+                }))
+            }
+            Err(err) => Ok(Response::new(SetConfigFileResponse {
+                accepted: false,
+                message: err.err_mesg.to_string(),
+                backup_file: String::new(),
+            })),
         }
     }
 

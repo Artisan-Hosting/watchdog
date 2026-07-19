@@ -1,5 +1,6 @@
 //! Public functional surface for watchdog runtime tasks.
 
+pub mod config_files;
 pub mod inventory;
 pub mod monitoring;
 pub mod verification;
