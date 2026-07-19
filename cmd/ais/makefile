@@ -74,6 +74,12 @@ run: build
 	@echo ">> running ./$(BIN) $(ARGS)"
 	./$(BIN) $(ARGS)
 
+# ---- Install Binary ----
+.PHONY: install
+install: build
+	@echo ">> installing $(BIN)"
+	install -m 0755 ./$(BIN) /usr/bin/ais
+
 # ---- Go mod tidy (optional) ----
 .PHONY: tidy
 tidy:
