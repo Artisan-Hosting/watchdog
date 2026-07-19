@@ -18,7 +18,7 @@ SHELL := /bin/bash
 # ---- Paths / names ----
 MODULE          := ais
 BIN             := ais
-MAIN            := ./main.go
+MAIN            := .
 
 PROTO_DIR       := proto
 PROTO_FILE      := $(PROTO_DIR)/watchdog.proto

@@ -14,7 +14,9 @@ import (
 	pb "ais/generated/artisan/watchdog"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -50,7 +52,7 @@ func main() {
 		}),
 	)
 	if err != nil {
-		log.Fatalf("failed to connect to socket: %v", err)
+		fatalRPC("failed to connect to socket", err)
 	}
 	defer conn.Close()
 
@@ -95,6 +97,14 @@ func main() {
 			os.Exit(1)
 		}
 		queryHistoricalLogs(ctx, client, args[0], stream, start, end, limit, cursor)
+	case "setup":
+		if err := runSetup(client, args); err != nil {
+			fatalRPC("setup", err)
+		}
+	case "edit":
+		if err := runEdit(client, args); err != nil {
+			fatalRPC("edit", err)
+		}
 	default:
 		fmt.Printf("Unknown command: %s\n\n", command)
 		printUsage()
@@ -103,7 +113,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`Usage: ais [command] [args]
+	fmt.Print(`Usage: ais [command] [args]
 
 Commands:
   list
@@ -118,6 +128,8 @@ Commands:
   usage <application> [start] [end]
   logs-current <application> [limit]
   logs-history <application> [stream] [start] [end] [limit] [cursor]
+  setup [application]
+  edit <application> [config|overrides]
 
 Examples:
   ais get myapp log_level
@@ -125,7 +137,21 @@ Examples:
   ais start myapp
   ais logs-current ais_manager 200
   ais logs-history ais_manager both 0 0 300 0
+  sudo ais setup
+  sudo ais setup 1a2b3c4d
+  sudo ais edit ais_1a2b3c4d config
 `)
+}
+
+func fatalRPC(operation string, err error) {
+	fmt.Fprintf(os.Stderr, "%s: %v\n", operation, err)
+	lower := strings.ToLower(err.Error())
+	if os.Geteuid() != 0 && (status.Code(err) == codes.PermissionDenied ||
+		status.Code(err) == codes.Unavailable ||
+		strings.Contains(lower, "permission denied")) {
+		fmt.Fprintln(os.Stderr, "the watchdog socket is root-only; re-run with sudo")
+	}
+	os.Exit(1)
 }
 
 func requireArgs(args []string, n int, usage string) {
@@ -138,7 +164,7 @@ func requireArgs(args []string, n int, usage string) {
 func listApplications(ctx context.Context, client pb.WatchdogClient) {
 	resp, err := client.ListApplications(ctx, &pb.Empty{})
 	if err != nil {
-		log.Fatalf("ListApplications: %v", err)
+		fatalRPC("ListApplications", err)
 	}
 	if len(resp.Applications) == 0 {
 		fmt.Println("No applications found.")
@@ -184,11 +210,11 @@ func isSystemApplication(name string) bool {
 func getSystemInfo(ctx context.Context, client pb.WatchdogClient) {
 	info, err := client.GetSystemInfo(ctx, &pb.Empty{})
 	if err != nil {
-		log.Fatalf("GetSystemInfo: %v", err)
+		fatalRPC("GetSystemInfo", err)
 	}
 	versions, err := client.GetVersionInfo(ctx, &pb.Empty{})
 	if err != nil {
-		log.Fatalf("GetVersionInfo: %v", err)
+		fatalRPC("GetVersionInfo", err)
 	}
 	fmt.Printf(
 		"Identity: %s\nManager Linked: %v\nSystem Apps Initialized: %v\nSecurity Tripped: %v\nSecurity Trip Detected At: %d\nSecurity Trip Summary: %s\nWatchdog Version: %s\nArtisan Middleware Version: %s\nIPs: %s\n",
@@ -207,7 +233,7 @@ func getSystemInfo(ctx context.Context, client pb.WatchdogClient) {
 func getApplicationStatus(ctx context.Context, client pb.WatchdogClient, name string) {
 	resp, err := client.GetApplication(ctx, &pb.ApplicationStatusRequest{Name: name})
 	if err != nil {
-		log.Fatalf("GetApplication: %v", err)
+		fatalRPC("GetApplication", err)
 	}
 	if !resp.Found {
 		fmt.Printf("Application '%s' not found.\n", name)
@@ -246,7 +272,7 @@ func executeSimpleCommand(ctx context.Context, client pb.WatchdogClient, cmd str
 
 	resp, err := client.ExecuteCommand(ctx, req)
 	if err != nil {
-		log.Fatalf("ExecuteCommand: %v", err)
+		fatalRPC("ExecuteCommand", err)
 	}
 	fmt.Printf("[%s] accepted=%v message=%s\n", strings.ToUpper(cmd), resp.Accepted, resp.Message)
 }
@@ -268,7 +294,7 @@ func executeGetCommand(ctx context.Context, client pb.WatchdogClient, app string
 
 	resp, err := client.ExecuteCommand(ctx, req)
 	if err != nil {
-		log.Fatalf("ExecuteCommand (get): %v", err)
+		fatalRPC("ExecuteCommand (get)", err)
 	}
 	fmt.Printf("[GET] accepted=%v message=%s\n", resp.Accepted, resp.Message)
 }
@@ -291,7 +317,7 @@ func executeSetCommand(ctx context.Context, client pb.WatchdogClient, app, field
 
 	resp, err := client.ExecuteCommand(ctx, req)
 	if err != nil {
-		log.Fatalf("ExecuteCommand (set): %v", err)
+		fatalRPC("ExecuteCommand (set)", err)
 	}
 	fmt.Printf("[SET] accepted=%v message=%s\n", resp.Accepted, resp.Message)
 }
@@ -304,7 +330,7 @@ func queryUsage(ctx context.Context, client pb.WatchdogClient, app string, start
 	}
 	resp, err := client.QueryUsage(ctx, req)
 	if err != nil {
-		log.Fatalf("QueryUsage: %v", err)
+		fatalRPC("QueryUsage", err)
 	}
 	if !resp.Found {
 		fmt.Printf("No usage data for %s in the requested window.\n", app)
@@ -333,7 +359,7 @@ func getCurrentLogs(ctx context.Context, client pb.WatchdogClient, app string, l
 	}
 	resp, err := client.GetCurrentLogs(ctx, req)
 	if err != nil {
-		log.Fatalf("GetCurrentLogs: %v", err)
+		fatalRPC("GetCurrentLogs", err)
 	}
 	if !resp.Found {
 		fmt.Printf("Application '%s' not found.\n", app)
@@ -379,7 +405,7 @@ func queryHistoricalLogs(
 	}
 	resp, err := client.QueryHistoricalLogs(ctx, req)
 	if err != nil {
-		log.Fatalf("QueryHistoricalLogs: %v", err)
+		fatalRPC("QueryHistoricalLogs", err)
 	}
 
 	if !resp.Found {
