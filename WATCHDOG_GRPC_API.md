@@ -13,6 +13,7 @@ It is intended for building an API server/gateway that talks to watchdog reliabl
 - Protocol: unary gRPC (no streaming RPCs)
 - Service: `artisan.watchdog.Watchdog`
 - Default Unix Domain Socket: `/tmp/artisan_watchdog.sock`
+- Socket access: mode `0600`; the server also rejects peers whose Unix UID is not `0`
 - Full RPC method paths:
   - `/artisan.watchdog.Watchdog/ListApplications`
   - `/artisan.watchdog.Watchdog/GetApplication`
@@ -25,6 +26,9 @@ It is intended for building an API server/gateway that talks to watchdog reliabl
   - `/artisan.watchdog.Watchdog/GetVersionInfo`
   - `/artisan.watchdog.Watchdog/ExecuteCommand`
   - `/artisan.watchdog.Watchdog/QueryUsage`
+  - `/artisan.watchdog.Watchdog/ListExpectedApps`
+  - `/artisan.watchdog.Watchdog/GetConfigFile`
+  - `/artisan.watchdog.Watchdog/SetConfigFile`
 
 ## Proto Source Of Truth
 
@@ -40,6 +44,9 @@ Core messages:
 - `SecurityTripStatus`
 - `VersionInfo`
 - `CommandRequest` / `CommandResponse`
+- `ExpectedAppsList`
+- `GetConfigFileRequest` / `GetConfigFileResponse`
+- `SetConfigFileRequest` / `SetConfigFileResponse`
 
 ## Timestamp And Units
 
@@ -216,6 +223,54 @@ If payload is missing, response is:
 - `accepted=false`
 - `message="Command payload missing"`
 
+### 12) `ListExpectedApps(Empty) -> ExpectedAppsList`
+
+The server refreshes its inventory from the encrypted git credentials before
+responding. If that refresh fails, it logs a warning and returns the cached
+snapshot.
+
+- `expected`: all derived `ais_<git_id>` application IDs, whether configured or not
+- `safe`: the subset with syntactically valid `Config.toml` and `Overrides.toml`
+- `last_scan`: inventory scan time as Unix epoch seconds
+
+Clients should use this RPC for application discovery and must not parse or
+decrypt `git.cf` themselves.
+
+### 13) `GetConfigFile(GetConfigFileRequest) -> GetConfigFileResponse`
+
+Request fields:
+
+- `application`: validated `ais_...` application ID
+- `kind`: `CONFIG_FILE_KIND_CONFIG` or `CONFIG_FILE_KIND_OVERRIDES`
+- `create_if_missing`: setup mode when `true`
+
+When `create_if_missing=false`, a missing file is a normal response with
+`found=false`. When it is `true`, the application must be present in the
+refreshed expected inventory (or be a critical system application). The server
+creates the directory and a valid placeholder file if needed.
+
+Response fields include the resolved server path, full content, and a SHA-256
+digest. `created=true` only when this request scaffolded the file. Legacy
+`Overides.toml` is read when present; new files use `Overrides.toml`.
+
+### 14) `SetConfigFile(SetConfigFileRequest) -> SetConfigFileResponse`
+
+The server validates the application name and TOML content, then compares
+`expected_previous_sha256` with the current file when the token is non-empty.
+A stale token, invalid TOML, or missing application config directory returns a
+normal response with `accepted=false` and a human-readable `message`.
+
+On success the server:
+
+1. Copies the old file to `<filename>.<YYYYMMDD-HHMMSS>[-N].aold`.
+2. Atomically replaces the live file while preserving its mode, UID, and GID.
+3. Prunes backups so only the newest five for that filename remain.
+4. Re-baselines the watchdog integrity manifest and refreshes client inventory.
+
+Backups are not encrypted because the adjacent live configuration is also
+plaintext. `backup_file` is the backup basename, or empty when there was no
+previous file.
+
 ## CLI Mapping (For Gateway Parity)
 
 From `cmd/ais/main.go`:
@@ -229,15 +284,19 @@ From `cmd/ais/main.go`:
 - `ais start|stop|reload|rebuild <app>` -> `ExecuteCommand` (matching payload)
 - `ais get <app> <field>` -> `ExecuteCommand.get`
 - `ais set <app> <field> <value>` -> `ExecuteCommand.set`
+- `ais setup [app]` -> `ListExpectedApps`, `GetConfigFile(create_if_missing=true)`, `SetConfigFile`
+- `ais edit <app> [config|overrides]` -> `ListExpectedApps`, `GetConfigFile`, `SetConfigFile`
 
 ## Notes For API Server Implementers
 
 - Use a Unix-socket-capable gRPC dialer (not plain TCP).
+- Production consumers must run as root; the socket permission change is breaking for non-root clients.
 - Treat `found=false` responses as valid empty/missing data, not transport errors.
 - For windowed APIs (`QueryUsage`, `QueryHistoricalLogs`), you can safely send `0` values and let watchdog apply defaults.
 - For `QueryHistoricalLogs`, pass back `next_cursor` until `has_more=false`.
 - For `ExecuteCommand.rebuild`, implement async UX: request accepted now, final result from `ListBuilds`.
 - Do not assume `set/get` are operational yet.
+- The `ExecuteCommand.set/get` field stubs remain unimplemented. Use the whole-file config RPCs for config reads and writes.
 
 ## Minimal Request Examples (Conceptual)
 

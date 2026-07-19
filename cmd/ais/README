@@ -1,183 +1,87 @@
-Here you go—a compact README you can drop at the repo root. It covers setup, proto regen, build/run, command syntax (including `get`/`set`), and a few gotchas you just hit (module path + symlinked proto).
-
----
-
 # ais
 
-A tiny Go CLI that talks to the `Watchdog` gRPC service over a **Unix domain socket**.
+`ais` is a Go CLI for the watchdog gRPC service. It connects to the Unix
+socket at `/tmp/artisan_watchdog.sock` by default.
 
-## Requirements
+The production socket is mode `0600` and watchdog also checks Unix peer
+credentials, so commands must run as root (normally with `sudo`).
 
-* Go 1.22+ (you’re on 1.24.x—fine)
-* `protoc` (protobuf compiler)
-* Go plugins:
+## Build
 
-  * `protoc-gen-go`
-  * `protoc-gen-go-grpc`
+Requirements:
 
-Install plugins (if needed):
-
-```bash
-go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-# Ensure GOPATH/bin is on PATH:
-# echo 'export PATH=$(go env GOPATH)/bin:$PATH' >> ~/.bashrc && source ~/.bashrc
-```
-
-## Project layout
-
-```
-.
-├── main.go
-├── Makefile
-├── go.mod            # module ais
-├── proto/
-│   └── watchdog.proto
-└── generated/
-    └── artisan/watchdog/
-        ├── watchdog.pb.go
-        └── watchdog_grpc.pb.go
-```
-
-**Important:** `proto/watchdog.proto` should contain:
-
-```proto
-option go_package = "ais/generated/artisan/watchdog;watchdog";
-```
-
-## Build & regenerate
-
-Common tasks are wrapped in the **Makefile**:
+- Go 1.24 or newer
+- `protoc`
+- `protoc-gen-go` and `protoc-gen-go-grpc`
 
 ```bash
-# Generate protobufs + build binary (default)
-make
-
-# Only regenerate protobuf stubs
-make proto
-
-# Build binary (Linux/amd64 by default in Makefile)
-make build
-
-# Run with args
-make run ARGS="list"
+make proto  # regenerate Go protobuf and gRPC code
+make build  # build ./ais
+make        # run both steps
 ```
 
-### Manual protoc (if you prefer)
+The canonical service contract is `../../proto/watchdog.proto`; keep the CLI
+copy at `proto/watchdog.proto` byte-identical when changing the API.
+
+## Config setup and editing
+
+Scaffold and edit every application found in the encrypted git credentials:
 
 ```bash
-protoc -I proto \
-  --go_out=generated \
-  --go-grpc_out=generated \
-  proto/watchdog.proto
+sudo ./ais setup
 ```
 
-## Running
-
-By default, the CLI connects to: `/tmp/watchdog.sock`
+Limit setup to one application using its full ID, bare hash, or an unambiguous
+hash prefix:
 
 ```bash
-./watchdog-cli [--socket /path/to.sock] <command> [args]
+sudo ./ais setup ais_1a2b3c4d
+sudo ./ais setup 1a2b3c4d
+sudo ./ais setup 1a2b
 ```
 
-## Commands
+`setup` creates missing `/opt/artisan/etc/<ais_id>/Config.toml` and
+`Overrides.toml` placeholders, then offers to stop the app before opening both
+files. Existing files are never replaced during scaffolding.
 
-### Discovery & info
+Edit existing files with:
 
 ```bash
-# List all applications
-./watchdog-cli list
-
-# System info (identity, linked, IPs, etc.)
-./watchdog-cli info
-
-# App status
-./watchdog-cli status <application>
+sudo ./ais edit ais_1a2b3c4d
+sudo ./ais edit 1a2b3c4d config
+sudo ./ais edit 1a2b3c4d overrides
 ```
 
-### Control (ExecuteCommand)
+`edit` does not scaffold. If a requested file is missing, run `ais setup`
+first. The editor is selected from `$VISUAL`, then `$EDITOR`, then `vi`.
+
+Before saving, the CLI validates TOML locally and the watchdog validates it
+again. The watchdog rejects stale edits using a SHA-256 concurrency token. Each
+successful replacement creates a timestamped `.aold` backup and retains the
+newest five backups per file.
+
+If an app was running, the CLI stops it before editing and starts it after all
+selected files are handled. If editing is interrupted, it asks whether the app
+should be restarted so a stopped process is not silently stranded.
+
+## Other commands
+
+```text
+list
+info
+status <application>
+start|stop|reload|rebuild <application>
+get <application> <field>
+set <application> <field> <value>
+usage <application> [start] [end]
+logs-current <application> [limit]
+logs-history <application> [stream] [start] [end] [limit] [cursor]
+setup [application]
+edit <application> [config|overrides]
+```
+
+Use a non-default socket with `--socket` before the command:
 
 ```bash
-# Start/stop/reload/rebuild
-./watchdog-cli start  <application>
-./watchdog-cli stop   <application>
-./watchdog-cli reload <application>
-./watchdog-cli rebuild <application>
+sudo ./ais --socket /path/to/watchdog.sock list
 ```
-
-### Config: `get` / `set`
-
-**Get:**
-
-```bash
-./watchdog-cli get <application> <field>
-```
-
-**Set:**
-
-```bash
-./watchdog-cli set <application> <field> <value>
-```
-
-Supported `<field>` values (case-insensitive):
-
-* `build_command` (string)
-* `run_command` (string)
-* `dependencies_command` (string)
-* `log_level` (string)
-* `memory_cap` (uint32)
-* `cpu_cap` (uint32)
-* `monitor_directory` (string)
-* `working_directory` (string)
-* `changes_needed` (uint32)
-* `dir_scan_interval` (uint32)
-
-**Examples:**
-
-```bash
-# Read a value
-./watchdog-cli get myapp log_level
-
-# Update values
-./watchdog-cli set myapp log_level debug
-./watchdog-cli set myapp memory_cap 512
-./watchdog-cli set myapp working_directory /opt/myapp
-```
-
-## Socket path
-
-All commands accept a custom Unix socket:
-
-```bash
-./watchdog-cli --socket /var/run/watchdog.sock list
-```
-
-## Troubleshooting
-
-* **“package … is not in std”**
-  Your import path & module name don’t match. Ensure:
-
-  * `go.mod` has `module ais`
-  * `proto/watchdog.proto` has `option go_package = "ais/generated/artisan/watchdog;watchdog";`
-  * Imports in `main.go` use:
-    `pb "ais/generated/artisan/watchdog"`
-
-* **`protoc-gen-go: program not found`**
-  Install plugins and ensure `$(go env GOPATH)/bin` is on your `PATH`.
-
-* **Weird generated folder structure**
-  Usually caused by symlinked protos or mismatched `go_package`. If your `.proto` is a symlink, either:
-
-  * add the real dir as an extra include (`make proto REAL_PROTO_DIR=/abs/path/to/real/dir`), or
-  * copy the file locally into `proto/` before generating.
-
-* **`go mod tidy` tries to fetch a URL-like module**
-  Keep `module ais` for local-only development, or use a `replace` if you keep a URL-like path.
-
-## License
-
-MIT (or whatever you prefer).
-
----
-
-Ping me if you want a `watch`/`tail` subcommand to stream `stdout`/`stderr` entries for an app.
