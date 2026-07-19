@@ -26,7 +26,7 @@ use artisan_middleware::{
 };
 use byteorder::{LittleEndian, WriteBytesExt};
 use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use nix::{ioctl_none, ioctl_write_ptr, unistd};
 use once_cell::sync::OnceCell;
 use prost::Message;

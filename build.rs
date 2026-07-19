@@ -8,7 +8,7 @@ use std::{
 
 /// Build-script entrypoint.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::configure().compile_protos(&["proto/watchdog.proto"], &["proto"])?;
+    tonic_prost_build::configure().compile_protos(&["proto/watchdog.proto"], &["proto"])?;
     configure_version_env_vars()?;
     build_ebpf()?;
     Ok(())

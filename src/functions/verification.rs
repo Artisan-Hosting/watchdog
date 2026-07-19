@@ -439,7 +439,8 @@ fn hash_file(path: &Path) -> Result<String, ErrorArrayItem> {
         hasher.update(&buffer[..read]);
     }
 
-    Ok(format!("{:x}", hasher.finalize()))
+    let digest = hasher.finalize();
+    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// Hashes all files and returns digest records in stable path order.

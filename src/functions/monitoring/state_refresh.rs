@@ -15,7 +15,7 @@ use artisan_middleware::{
 };
 use nix::unistd::Pid;
 use once_cell::sync::Lazy;
-use rand::Rng;
+use rand::RngExt;
 use std::{
     collections::{HashMap, HashSet},
     convert::TryFrom,
@@ -543,7 +543,7 @@ async fn load_state_snapshot_by_name(name: &str) -> Option<AppState> {
 
 async fn throttled_state_load(path: PathType) -> Option<AppState> {
     let display = path.to_string();
-    let delay_ms = rand::thread_rng().gen_range(1_000..=3_000);
+    let delay_ms = rand::rng().random_range(1_000..=3_000);
     log!(
         LogLevel::Trace,
         "Queueing state read for {} with delay {}ms",
