@@ -30,6 +30,9 @@ const (
 	Watchdog_GetVersionInfo_FullMethodName        = "/artisan.watchdog.Watchdog/GetVersionInfo"
 	Watchdog_ExecuteCommand_FullMethodName        = "/artisan.watchdog.Watchdog/ExecuteCommand"
 	Watchdog_QueryUsage_FullMethodName            = "/artisan.watchdog.Watchdog/QueryUsage"
+	Watchdog_ListExpectedApps_FullMethodName      = "/artisan.watchdog.Watchdog/ListExpectedApps"
+	Watchdog_GetConfigFile_FullMethodName         = "/artisan.watchdog.Watchdog/GetConfigFile"
+	Watchdog_SetConfigFile_FullMethodName         = "/artisan.watchdog.Watchdog/SetConfigFile"
 )
 
 // WatchdogClient is the client API for Watchdog service.
@@ -47,6 +50,9 @@ type WatchdogClient interface {
 	GetVersionInfo(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*VersionInfo, error)
 	ExecuteCommand(ctx context.Context, in *CommandRequest, opts ...grpc.CallOption) (*CommandResponse, error)
 	QueryUsage(ctx context.Context, in *UsageQueryRequest, opts ...grpc.CallOption) (*UsageQueryResponse, error)
+	ListExpectedApps(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ExpectedAppsList, error)
+	GetConfigFile(ctx context.Context, in *GetConfigFileRequest, opts ...grpc.CallOption) (*GetConfigFileResponse, error)
+	SetConfigFile(ctx context.Context, in *SetConfigFileRequest, opts ...grpc.CallOption) (*SetConfigFileResponse, error)
 }
 
 type watchdogClient struct {
@@ -167,6 +173,36 @@ func (c *watchdogClient) QueryUsage(ctx context.Context, in *UsageQueryRequest, 
 	return out, nil
 }
 
+func (c *watchdogClient) ListExpectedApps(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ExpectedAppsList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExpectedAppsList)
+	err := c.cc.Invoke(ctx, Watchdog_ListExpectedApps_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *watchdogClient) GetConfigFile(ctx context.Context, in *GetConfigFileRequest, opts ...grpc.CallOption) (*GetConfigFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetConfigFileResponse)
+	err := c.cc.Invoke(ctx, Watchdog_GetConfigFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *watchdogClient) SetConfigFile(ctx context.Context, in *SetConfigFileRequest, opts ...grpc.CallOption) (*SetConfigFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetConfigFileResponse)
+	err := c.cc.Invoke(ctx, Watchdog_SetConfigFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WatchdogServer is the server API for Watchdog service.
 // All implementations must embed UnimplementedWatchdogServer
 // for forward compatibility.
@@ -182,6 +218,9 @@ type WatchdogServer interface {
 	GetVersionInfo(context.Context, *Empty) (*VersionInfo, error)
 	ExecuteCommand(context.Context, *CommandRequest) (*CommandResponse, error)
 	QueryUsage(context.Context, *UsageQueryRequest) (*UsageQueryResponse, error)
+	ListExpectedApps(context.Context, *Empty) (*ExpectedAppsList, error)
+	GetConfigFile(context.Context, *GetConfigFileRequest) (*GetConfigFileResponse, error)
+	SetConfigFile(context.Context, *SetConfigFileRequest) (*SetConfigFileResponse, error)
 	mustEmbedUnimplementedWatchdogServer()
 }
 
@@ -224,6 +263,15 @@ func (UnimplementedWatchdogServer) ExecuteCommand(context.Context, *CommandReque
 }
 func (UnimplementedWatchdogServer) QueryUsage(context.Context, *UsageQueryRequest) (*UsageQueryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method QueryUsage not implemented")
+}
+func (UnimplementedWatchdogServer) ListExpectedApps(context.Context, *Empty) (*ExpectedAppsList, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListExpectedApps not implemented")
+}
+func (UnimplementedWatchdogServer) GetConfigFile(context.Context, *GetConfigFileRequest) (*GetConfigFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetConfigFile not implemented")
+}
+func (UnimplementedWatchdogServer) SetConfigFile(context.Context, *SetConfigFileRequest) (*SetConfigFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetConfigFile not implemented")
 }
 func (UnimplementedWatchdogServer) mustEmbedUnimplementedWatchdogServer() {}
 func (UnimplementedWatchdogServer) testEmbeddedByValue()                  {}
@@ -444,6 +492,60 @@ func _Watchdog_QueryUsage_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Watchdog_ListExpectedApps_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).ListExpectedApps(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_ListExpectedApps_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).ListExpectedApps(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Watchdog_GetConfigFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetConfigFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).GetConfigFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_GetConfigFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).GetConfigFile(ctx, req.(*GetConfigFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Watchdog_SetConfigFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetConfigFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).SetConfigFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_SetConfigFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).SetConfigFile(ctx, req.(*SetConfigFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Watchdog_ServiceDesc is the grpc.ServiceDesc for Watchdog service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -494,6 +596,18 @@ var Watchdog_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "QueryUsage",
 			Handler:    _Watchdog_QueryUsage_Handler,
+		},
+		{
+			MethodName: "ListExpectedApps",
+			Handler:    _Watchdog_ListExpectedApps_Handler,
+		},
+		{
+			MethodName: "GetConfigFile",
+			Handler:    _Watchdog_GetConfigFile_Handler,
+		},
+		{
+			MethodName: "SetConfigFile",
+			Handler:    _Watchdog_SetConfigFile_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

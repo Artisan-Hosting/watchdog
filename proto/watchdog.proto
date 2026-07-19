@@ -157,6 +157,51 @@ message VersionInfo {
   string artisan_middleware_version = 2;
 }
 
+message ExpectedAppsList {
+  // All ais_<git_id> names derived from git credentials, regardless of config state.
+  repeated string expected = 1;
+  // Subset with valid Config.toml + Overrides.toml on disk.
+  repeated string safe = 2;
+  uint64 last_scan = 3;
+}
+
+enum ConfigFileKind {
+  CONFIG_FILE_KIND_UNSPECIFIED = 0;
+  CONFIG_FILE_KIND_CONFIG = 1;
+  CONFIG_FILE_KIND_OVERRIDES = 2;
+}
+
+message GetConfigFileRequest {
+  string application = 1;
+  ConfigFileKind kind = 2;
+  // Setup mode: scaffold the app dir/file with a placeholder if missing.
+  bool create_if_missing = 3;
+}
+
+message GetConfigFileResponse {
+  bool found = 1;
+  bool created = 2;
+  string path = 3;
+  string content = 4;
+  // Digest of the returned content; echo back in SetConfigFileRequest as a concurrency token.
+  string sha256 = 5;
+}
+
+message SetConfigFileRequest {
+  string application = 1;
+  ConfigFileKind kind = 2;
+  string content = 3;
+  // Optimistic lock: rejected if the on-disk file no longer matches. Empty skips the check.
+  string expected_previous_sha256 = 4;
+}
+
+message SetConfigFileResponse {
+  bool accepted = 1;
+  string message = 2;
+  // Name of the timestamped .aold backup written, empty for a brand-new file.
+  string backup_file = 3;
+}
+
 enum GetConfigField {
   GET_CONFIG_FIELD_UNSPECIFIED = 0;
   GET_CONFIG_FIELD_BUILD_COMMAND = 1;
@@ -248,4 +293,7 @@ service Watchdog {
   rpc GetVersionInfo(Empty) returns (VersionInfo);
   rpc ExecuteCommand(CommandRequest) returns (CommandResponse);
   rpc QueryUsage(UsageQueryRequest) returns (UsageQueryResponse);
+  rpc ListExpectedApps(Empty) returns (ExpectedAppsList);
+  rpc GetConfigFile(GetConfigFileRequest) returns (GetConfigFileResponse);
+  rpc SetConfigFile(SetConfigFileRequest) returns (SetConfigFileResponse);
 }
