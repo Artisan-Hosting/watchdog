@@ -61,6 +61,8 @@ func main() {
 	defer cancel()
 
 	switch command {
+	case "recalculate":
+		recalculateAllowedClients(ctx, client)
 	case "list":
 		listApplications(ctx, client)
 	case "info":
@@ -130,6 +132,7 @@ Commands:
   logs-history <application> [stream] [start] [end] [limit] [cursor]
   setup [application]
   edit <application> [config|overrides]
+  recalculate
 
 Examples:
   ais get myapp log_level
@@ -634,4 +637,12 @@ func buildSetValue(field, value string) (*pb.SetConfigValue, bool) {
 	default:
 		return nil, false
 	}
+}
+
+func recalculateAllowedClients(ctx context.Context, client pb.WatchdogClient) {
+	resp, err := client.RecalculateAllowedClients(ctx, &pb.Empty{})
+	if err != nil {
+		fatalRPC("RecalculateAllowedClients", err)
+	}
+	fmt.Printf("[RECALCULATE] accepted=%v message=%s\n", resp.Accepted, resp.Message)
 }

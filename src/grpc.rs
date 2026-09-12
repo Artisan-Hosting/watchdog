@@ -36,7 +36,7 @@ use proto::{
     HistoricalLogsRequest, HistoricalLogsResponse, LogStream, NetworkUsageMessage,
     SecurityTripStatus, SetConfigFileRequest, SetConfigFileResponse, StdLogEntry, SystemInfo,
     UsageQueryRequest, UsageQueryResponse, VerificationEntryList, VerificationEntryMessage,
-    VersionInfo,
+    VersionInfo, GetConfigField, set_config_value,
     watchdog_server::{Watchdog, WatchdogServer},
 };
 
@@ -819,8 +819,126 @@ impl Watchdog for WatchdogService {
                     );
                     (true, message)
                 }
-                Payload::Set(_set_command) => (false, "Not implemented".to_string()),
-                Payload::Get(_get_command) => (false, "Not implemented".to_string()),
+                Payload::Get(get_command) => {
+                    let app = &get_command.application;
+                    if let Err(err) = config_files::validate_ais_name(app) {
+                        (false, format!("Invalid application name: {}", err.err_mesg))
+                    } else {
+                        let field_enum = proto::GetConfigField::try_from(get_command.field)
+                            .ok()
+                            .unwrap_or(proto::GetConfigField::Unspecified);
+                        if let Some(kind) = get_config_file_kind_for_get(field_enum) {
+                            match config_files::read_config_file_managed(
+                                &config_files::conf_dir(),
+                                app,
+                                kind,
+                                false,
+                            )
+                            .await
+                            {
+                                Ok(read) => {
+                                    if !read.found {
+                                        (false, "Config file not found".to_string())
+                                    } else {
+                                        match toml::from_str::<toml::Value>(&read.content) {
+                                            Ok(toml_val) => {
+                                                if let Some(val) = get_field_from_toml(&toml_val, field_enum) {
+                                                    (true, val)
+                                                } else {
+                                                    (false, "Field not found in configuration".to_string())
+                                                }
+                                            }
+                                            Err(err) => (false, format!("Invalid TOML content: {}", err)),
+                                        }
+                                    }
+                                }
+                                Err(err) => (false, format!("Failed to read config file: {}", err.err_mesg)),
+                            }
+                        } else {
+                            (false, "Unsupported or unspecified config field".to_string())
+                        }
+                    }
+                }
+                Payload::Set(set_command) => {
+                    let app = &set_command.application;
+                    if let Err(err) = config_files::validate_ais_name(app) {
+                        (false, format!("Invalid application name: {}", err.err_mesg))
+                    } else if let Some(ref set_config_value) = set_command.value {
+                        if let Some(ref val) = set_config_value.value {
+                            if let Some(kind) = get_config_file_kind_for_set(val) {
+                                match config_files::read_config_file_managed(
+                                    &config_files::conf_dir(),
+                                    app,
+                                    kind,
+                                    true, // Create/scaffold if missing
+                                )
+                                .await
+                                {
+                                    Ok(read) => {
+                                        match toml::from_str::<toml::Value>(&read.content) {
+                                            Ok(mut toml_val) => {
+                                                if let Err(err) = set_field_in_toml(&mut toml_val, val) {
+                                                    (false, format!("Failed to update field: {}", err))
+                                                } else {
+                                                    match toml::to_string(&toml_val) {
+                                                        Ok(new_content) => {
+                                                            match config_files::write_config_file_managed(
+                                                                &config_files::conf_dir(),
+                                                                app,
+                                                                kind,
+                                                                &new_content,
+                                                                Some(&read.sha256),
+                                                            )
+                                                            .await
+                                                            {
+                                                                Ok(_) => {
+                                                                    // Gracefully restart application
+                                                                    let stop_res = functions::stop_application_stub(app, &self.process_handles).await;
+                                                                    let start_res = functions::start_application_stub(
+                                                                        app,
+                                                                        &self.process_handles,
+                                                                        &self.client_inventory_store,
+                                                                    )
+                                                                    .await;
+
+                                                                    let restart_msg = match (stop_res, start_res) {
+                                                                        (Ok(stop), Ok(start)) => {
+                                                                            format!("; restart: stopped accepted={} message={}; started accepted={} message={}", stop.accepted, stop.message, start.accepted, start.message)
+                                                                        }
+                                                                        (Err(stop_err), Ok(start)) => {
+                                                                            format!("; restart stop failed: {}; started accepted={} message={}", stop_err.err_mesg, start.accepted, start.message)
+                                                                        }
+                                                                        (Ok(stop), Err(start_err)) => {
+                                                                            format!("; restart: stopped accepted={} message={}; start failed: {}", stop.accepted, stop.message, start_err.err_mesg)
+                                                                        }
+                                                                        (Err(stop_err), Err(start_err)) => {
+                                                                            format!("; restart failed: stop={}, start={}", stop_err.err_mesg, start_err.err_mesg)
+                                                                        }
+                                                                    };
+                                                                    (true, format!("Successfully updated configuration{}", restart_msg))
+                                                                }
+                                                                Err(err) => (false, format!("Failed to write config file: {}", err.err_mesg)),
+                                                            }
+                                                        }
+                                                        Err(err) => (false, format!("Failed to serialize updated TOML: {}", err)),
+                                                    }
+                                                }
+                                            }
+                                            Err(err) => (false, format!("Failed to parse existing TOML: {}", err)),
+                                        }
+                                    }
+                                    Err(err) => (false, format!("Failed to read existing config: {}", err.err_mesg)),
+                                }
+                            } else {
+                                (false, "Unsupported configuration field".to_string())
+                            }
+                        } else {
+                            (false, "No value specified inside SetConfigValue".to_string())
+                        }
+                    } else {
+                        (false, "SetConfigValue is missing".to_string())
+                    }
+                }
             },
             None => (false, "Command payload missing".to_string()),
         };
@@ -828,6 +946,56 @@ impl Watchdog for WatchdogService {
         log!(LogLevel::Warn, "{}", message);
 
         Ok(Response::new(CommandResponse { accepted, message }))
+    }
+
+    async fn recalculate_allowed_clients(
+        &self,
+        _request: Request<Empty>,
+    ) -> Result<Response<CommandResponse>, Status> {
+        match functions::refresh_client_inventory_once(&self.client_inventory_store).await {
+            Ok(diff) => {
+                let safe_clients = {
+                    let guard = self.client_inventory_store.read().await;
+                    guard.safe_clients.clone()
+                };
+
+                functions::seed_placeholder_client_statuses(
+                    &self.client_application_status_store,
+                    &safe_clients,
+                )
+                .await;
+
+                let build_status_store = self.build_status_store.clone();
+                let client_inventory_store = self.client_inventory_store.clone();
+                tokio::spawn(async move {
+                    functions::auto_build_safe_clients(
+                        &client_inventory_store,
+                        &build_status_store,
+                        safe_clients,
+                        std::time::Duration::from_secs(60),
+                    )
+                    .await;
+                });
+
+                let message = format!(
+                    "Recalculated allowed client list: added {} expected, removed {} expected; added {} safe, removed {} safe",
+                    diff.expected_added.len(),
+                    diff.expected_removed.len(),
+                    diff.safe_added.len(),
+                    diff.safe_removed.len()
+                );
+                log!(LogLevel::Info, "{}", message);
+
+                Ok(Response::new(CommandResponse {
+                    accepted: true,
+                    message,
+                }))
+            }
+            Err(err) => Err(Status::internal(format!(
+                "Failed to refresh inventory: {}",
+                err.err_mesg
+            ))),
+        }
     }
 }
 
@@ -957,4 +1125,187 @@ fn proto_stream_from_ledger(stream: ledger::LogStream) -> LogStream {
         ledger::LogStream::Stdout => LogStream::Stdout,
         ledger::LogStream::Stderr => LogStream::Stderr,
     }
+}
+
+fn get_config_file_kind_for_get(field: GetConfigField) -> Option<config_files::ConfigFileKind> {
+    match field {
+        GetConfigField::BuildCommand
+        | GetConfigField::RunCommand
+        | GetConfigField::DependenciesCommand
+        | GetConfigField::MonitorDirectory
+        | GetConfigField::WorkingDirectory
+        | GetConfigField::ChangesNeeded
+        | GetConfigField::DirScanInterval => Some(config_files::ConfigFileKind::Config),
+        GetConfigField::LogLevel
+        | GetConfigField::MemoryCap
+        | GetConfigField::CpuCap => Some(config_files::ConfigFileKind::Overrides),
+        _ => None,
+    }
+}
+
+fn get_config_file_kind_for_set(val: &set_config_value::Value) -> Option<config_files::ConfigFileKind> {
+    match val {
+        set_config_value::Value::BuildCommand(_)
+        | set_config_value::Value::RunCommand(_)
+        | set_config_value::Value::DependenciesCommand(_)
+        | set_config_value::Value::MonitorDirectory(_)
+        | set_config_value::Value::WorkingDirectory(_)
+        | set_config_value::Value::ChangesNeeded(_)
+        | set_config_value::Value::DirScanInterval(_) => Some(config_files::ConfigFileKind::Config),
+        set_config_value::Value::LogLevel(_)
+        | set_config_value::Value::MemoryCap(_)
+        | set_config_value::Value::CpuCap(_) => Some(config_files::ConfigFileKind::Overrides),
+    }
+}
+
+fn get_field_from_toml(value: &toml::Value, field: GetConfigField) -> Option<String> {
+    match field {
+        GetConfigField::BuildCommand => {
+            value.get("app_specific")
+                .and_then(|v| v.get("build_command"))
+                .map(|v| match v {
+                    toml::Value::String(s) => s.clone(),
+                    v => v.to_string(),
+                })
+        }
+        GetConfigField::RunCommand => {
+            value.get("app_specific")
+                .and_then(|v| v.get("run_command"))
+                .map(|v| match v {
+                    toml::Value::String(s) => s.clone(),
+                    v => v.to_string(),
+                })
+        }
+        GetConfigField::DependenciesCommand => {
+            value.get("app_specific")
+                .and_then(|v| v.get("install_command"))
+                .map(|v| match v {
+                    toml::Value::String(s) => s.clone(),
+                    v => v.to_string(),
+                })
+        }
+        GetConfigField::LogLevel => {
+            value.get("log_level")
+                .map(|v| match v {
+                    toml::Value::String(s) => s.clone(),
+                    v => v.to_string(),
+                })
+        }
+        GetConfigField::MemoryCap => {
+            value.get("memory_cap")
+                .map(|v| v.to_string())
+        }
+        GetConfigField::CpuCap => {
+            value.get("cpu_cap")
+                .map(|v| v.to_string())
+        }
+        GetConfigField::MonitorDirectory => {
+            value.get("app_specific")
+                .and_then(|v| v.get("monitor_path"))
+                .map(|v| match v {
+                    toml::Value::String(s) => s.clone(),
+                    v => v.to_string(),
+                })
+        }
+        GetConfigField::WorkingDirectory => {
+            value.get("app_specific")
+                .and_then(|v| v.get("project_path"))
+                .map(|v| match v {
+                    toml::Value::String(s) => s.clone(),
+                    v => v.to_string(),
+                })
+        }
+        GetConfigField::ChangesNeeded => {
+            value.get("app_specific")
+                .and_then(|v| v.get("changes_needed"))
+                .map(|v| v.to_string())
+        }
+        GetConfigField::DirScanInterval => {
+            value.get("app_specific")
+                .and_then(|v| v.get("interval_seconds"))
+                .map(|v| v.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn set_field_in_toml(value: &mut toml::Value, new_val: &set_config_value::Value) -> Result<(), &'static str> {
+    match new_val {
+        set_config_value::Value::BuildCommand(cmd) => {
+            let app_specific = value.as_table_mut()
+                .ok_or("Root is not a table")?
+                .entry("app_specific")
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+                .as_table_mut()
+                .ok_or("app_specific is not a table")?;
+            app_specific.insert("build_command".to_string(), toml::Value::String(cmd.clone()));
+        }
+        set_config_value::Value::RunCommand(cmd) => {
+            let app_specific = value.as_table_mut()
+                .ok_or("Root is not a table")?
+                .entry("app_specific")
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+                .as_table_mut()
+                .ok_or("app_specific is not a table")?;
+            app_specific.insert("run_command".to_string(), toml::Value::String(cmd.clone()));
+        }
+        set_config_value::Value::DependenciesCommand(cmd) => {
+            let app_specific = value.as_table_mut()
+                .ok_or("Root is not a table")?
+                .entry("app_specific")
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+                .as_table_mut()
+                .ok_or("app_specific is not a table")?;
+            app_specific.insert("install_command".to_string(), toml::Value::String(cmd.clone()));
+        }
+        set_config_value::Value::LogLevel(lvl) => {
+            let root = value.as_table_mut().ok_or("Root is not a table")?;
+            root.insert("log_level".to_string(), toml::Value::String(lvl.clone()));
+        }
+        set_config_value::Value::MemoryCap(cap) => {
+            let root = value.as_table_mut().ok_or("Root is not a table")?;
+            root.insert("memory_cap".to_string(), toml::Value::Integer(*cap as i64));
+        }
+        set_config_value::Value::CpuCap(cap) => {
+            let root = value.as_table_mut().ok_or("Root is not a table")?;
+            root.insert("cpu_cap".to_string(), toml::Value::Integer(*cap as i64));
+        }
+        set_config_value::Value::MonitorDirectory(dir) => {
+            let app_specific = value.as_table_mut()
+                .ok_or("Root is not a table")?
+                .entry("app_specific")
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+                .as_table_mut()
+                .ok_or("app_specific is not a table")?;
+            app_specific.insert("monitor_path".to_string(), toml::Value::String(dir.clone()));
+        }
+        set_config_value::Value::WorkingDirectory(dir) => {
+            let app_specific = value.as_table_mut()
+                .ok_or("Root is not a table")?
+                .entry("app_specific")
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+                .as_table_mut()
+                .ok_or("app_specific is not a table")?;
+            app_specific.insert("project_path".to_string(), toml::Value::String(dir.clone()));
+        }
+        set_config_value::Value::ChangesNeeded(cnt) => {
+            let app_specific = value.as_table_mut()
+                .ok_or("Root is not a table")?
+                .entry("app_specific")
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+                .as_table_mut()
+                .ok_or("app_specific is not a table")?;
+            app_specific.insert("changes_needed".to_string(), toml::Value::Integer(*cnt as i64));
+        }
+        set_config_value::Value::DirScanInterval(seconds) => {
+            let app_specific = value.as_table_mut()
+                .ok_or("Root is not a table")?
+                .entry("app_specific")
+                .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
+                .as_table_mut()
+                .ok_or("app_specific is not a table")?;
+            app_specific.insert("interval_seconds".to_string(), toml::Value::Integer(*seconds as i64));
+        }
+    }
+    Ok(())
 }

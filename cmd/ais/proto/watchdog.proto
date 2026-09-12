@@ -296,4 +296,5 @@ service Watchdog {
   rpc ListExpectedApps(Empty) returns (ExpectedAppsList);
   rpc GetConfigFile(GetConfigFileRequest) returns (GetConfigFileResponse);
   rpc SetConfigFile(SetConfigFileRequest) returns (SetConfigFileResponse);
+  rpc RecalculateAllowedClients(Empty) returns (CommandResponse);
 }

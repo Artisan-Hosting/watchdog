@@ -2977,7 +2977,8 @@ const file_watchdog_proto_rawDesc = "" +
 	"\"GET_CONFIG_FIELD_WORKING_DIRECTORY\x10\b\x12#\n" +
 	"\x1fGET_CONFIG_FIELD_CHANGES_NEEDED\x10\t\x12&\n" +
 	"\"GET_CONFIG_FIELD_DIR_SCAN_INTERVAL\x10\n" +
-	"2\xe4\t\n" +
+	"2\xbd\n" +
+	"\n" +
 	"\bWatchdog\x12T\n" +
 	"\x10ListApplications\x12\x17.artisan.watchdog.Empty\x1a'.artisan.watchdog.ApplicationStatusList\x12i\n" +
 	"\x0eGetApplication\x12*.artisan.watchdog.ApplicationStatusRequest\x1a+.artisan.watchdog.ApplicationStatusResponse\x12]\n" +
@@ -2994,7 +2995,8 @@ const file_watchdog_proto_rawDesc = "" +
 	"QueryUsage\x12#.artisan.watchdog.UsageQueryRequest\x1a$.artisan.watchdog.UsageQueryResponse\x12O\n" +
 	"\x10ListExpectedApps\x12\x17.artisan.watchdog.Empty\x1a\".artisan.watchdog.ExpectedAppsList\x12`\n" +
 	"\rGetConfigFile\x12&.artisan.watchdog.GetConfigFileRequest\x1a'.artisan.watchdog.GetConfigFileResponse\x12`\n" +
-	"\rSetConfigFile\x12&.artisan.watchdog.SetConfigFileRequest\x1a'.artisan.watchdog.SetConfigFileResponseB\x1bZ\x19artisan/watchdog;watchdogb\x06proto3"
+	"\rSetConfigFile\x12&.artisan.watchdog.SetConfigFileRequest\x1a'.artisan.watchdog.SetConfigFileResponse\x12W\n" +
+	"\x19RecalculateAllowedClients\x12\x17.artisan.watchdog.Empty\x1a!.artisan.watchdog.CommandResponseB\x1bZ\x19artisan/watchdog;watchdogb\x06proto3"
 
 var (
 	file_watchdog_proto_rawDescOnce sync.Once
@@ -3094,22 +3096,24 @@ var file_watchdog_proto_depIdxs = []int32{
 	4,  // 37: artisan.watchdog.Watchdog.ListExpectedApps:input_type -> artisan.watchdog.Empty
 	26, // 38: artisan.watchdog.Watchdog.GetConfigFile:input_type -> artisan.watchdog.GetConfigFileRequest
 	28, // 39: artisan.watchdog.Watchdog.SetConfigFile:input_type -> artisan.watchdog.SetConfigFileRequest
-	10, // 40: artisan.watchdog.Watchdog.ListApplications:output_type -> artisan.watchdog.ApplicationStatusList
-	9,  // 41: artisan.watchdog.Watchdog.GetApplication:output_type -> artisan.watchdog.ApplicationStatusResponse
-	12, // 42: artisan.watchdog.Watchdog.GetCurrentLogs:output_type -> artisan.watchdog.CurrentLogsResponse
-	15, // 43: artisan.watchdog.Watchdog.QueryHistoricalLogs:output_type -> artisan.watchdog.HistoricalLogsResponse
-	19, // 44: artisan.watchdog.Watchdog.ListBuilds:output_type -> artisan.watchdog.BuildStatusList
-	21, // 45: artisan.watchdog.Watchdog.ListVerifications:output_type -> artisan.watchdog.VerificationEntryList
-	22, // 46: artisan.watchdog.Watchdog.GetSystemInfo:output_type -> artisan.watchdog.SystemInfo
-	23, // 47: artisan.watchdog.Watchdog.GetSecurityTripStatus:output_type -> artisan.watchdog.SecurityTripStatus
-	24, // 48: artisan.watchdog.Watchdog.GetVersionInfo:output_type -> artisan.watchdog.VersionInfo
-	40, // 49: artisan.watchdog.Watchdog.ExecuteCommand:output_type -> artisan.watchdog.CommandResponse
-	17, // 50: artisan.watchdog.Watchdog.QueryUsage:output_type -> artisan.watchdog.UsageQueryResponse
-	25, // 51: artisan.watchdog.Watchdog.ListExpectedApps:output_type -> artisan.watchdog.ExpectedAppsList
-	27, // 52: artisan.watchdog.Watchdog.GetConfigFile:output_type -> artisan.watchdog.GetConfigFileResponse
-	29, // 53: artisan.watchdog.Watchdog.SetConfigFile:output_type -> artisan.watchdog.SetConfigFileResponse
-	40, // [40:54] is the sub-list for method output_type
-	26, // [26:40] is the sub-list for method input_type
+	4,  // 40: artisan.watchdog.Watchdog.RecalculateAllowedClients:input_type -> artisan.watchdog.Empty
+	10, // 41: artisan.watchdog.Watchdog.ListApplications:output_type -> artisan.watchdog.ApplicationStatusList
+	9,  // 42: artisan.watchdog.Watchdog.GetApplication:output_type -> artisan.watchdog.ApplicationStatusResponse
+	12, // 43: artisan.watchdog.Watchdog.GetCurrentLogs:output_type -> artisan.watchdog.CurrentLogsResponse
+	15, // 44: artisan.watchdog.Watchdog.QueryHistoricalLogs:output_type -> artisan.watchdog.HistoricalLogsResponse
+	19, // 45: artisan.watchdog.Watchdog.ListBuilds:output_type -> artisan.watchdog.BuildStatusList
+	21, // 46: artisan.watchdog.Watchdog.ListVerifications:output_type -> artisan.watchdog.VerificationEntryList
+	22, // 47: artisan.watchdog.Watchdog.GetSystemInfo:output_type -> artisan.watchdog.SystemInfo
+	23, // 48: artisan.watchdog.Watchdog.GetSecurityTripStatus:output_type -> artisan.watchdog.SecurityTripStatus
+	24, // 49: artisan.watchdog.Watchdog.GetVersionInfo:output_type -> artisan.watchdog.VersionInfo
+	40, // 50: artisan.watchdog.Watchdog.ExecuteCommand:output_type -> artisan.watchdog.CommandResponse
+	17, // 51: artisan.watchdog.Watchdog.QueryUsage:output_type -> artisan.watchdog.UsageQueryResponse
+	25, // 52: artisan.watchdog.Watchdog.ListExpectedApps:output_type -> artisan.watchdog.ExpectedAppsList
+	27, // 53: artisan.watchdog.Watchdog.GetConfigFile:output_type -> artisan.watchdog.GetConfigFileResponse
+	29, // 54: artisan.watchdog.Watchdog.SetConfigFile:output_type -> artisan.watchdog.SetConfigFileResponse
+	40, // 55: artisan.watchdog.Watchdog.RecalculateAllowedClients:output_type -> artisan.watchdog.CommandResponse
+	41, // [41:56] is the sub-list for method output_type
+	26, // [26:41] is the sub-list for method input_type
 	26, // [26:26] is the sub-list for extension type_name
 	26, // [26:26] is the sub-list for extension extendee
 	0,  // [0:26] is the sub-list for field type_name

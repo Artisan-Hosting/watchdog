@@ -19,20 +19,21 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Watchdog_ListApplications_FullMethodName      = "/artisan.watchdog.Watchdog/ListApplications"
-	Watchdog_GetApplication_FullMethodName        = "/artisan.watchdog.Watchdog/GetApplication"
-	Watchdog_GetCurrentLogs_FullMethodName        = "/artisan.watchdog.Watchdog/GetCurrentLogs"
-	Watchdog_QueryHistoricalLogs_FullMethodName   = "/artisan.watchdog.Watchdog/QueryHistoricalLogs"
-	Watchdog_ListBuilds_FullMethodName            = "/artisan.watchdog.Watchdog/ListBuilds"
-	Watchdog_ListVerifications_FullMethodName     = "/artisan.watchdog.Watchdog/ListVerifications"
-	Watchdog_GetSystemInfo_FullMethodName         = "/artisan.watchdog.Watchdog/GetSystemInfo"
-	Watchdog_GetSecurityTripStatus_FullMethodName = "/artisan.watchdog.Watchdog/GetSecurityTripStatus"
-	Watchdog_GetVersionInfo_FullMethodName        = "/artisan.watchdog.Watchdog/GetVersionInfo"
-	Watchdog_ExecuteCommand_FullMethodName        = "/artisan.watchdog.Watchdog/ExecuteCommand"
-	Watchdog_QueryUsage_FullMethodName            = "/artisan.watchdog.Watchdog/QueryUsage"
-	Watchdog_ListExpectedApps_FullMethodName      = "/artisan.watchdog.Watchdog/ListExpectedApps"
-	Watchdog_GetConfigFile_FullMethodName         = "/artisan.watchdog.Watchdog/GetConfigFile"
-	Watchdog_SetConfigFile_FullMethodName         = "/artisan.watchdog.Watchdog/SetConfigFile"
+	Watchdog_ListApplications_FullMethodName          = "/artisan.watchdog.Watchdog/ListApplications"
+	Watchdog_GetApplication_FullMethodName            = "/artisan.watchdog.Watchdog/GetApplication"
+	Watchdog_GetCurrentLogs_FullMethodName            = "/artisan.watchdog.Watchdog/GetCurrentLogs"
+	Watchdog_QueryHistoricalLogs_FullMethodName       = "/artisan.watchdog.Watchdog/QueryHistoricalLogs"
+	Watchdog_ListBuilds_FullMethodName                = "/artisan.watchdog.Watchdog/ListBuilds"
+	Watchdog_ListVerifications_FullMethodName         = "/artisan.watchdog.Watchdog/ListVerifications"
+	Watchdog_GetSystemInfo_FullMethodName             = "/artisan.watchdog.Watchdog/GetSystemInfo"
+	Watchdog_GetSecurityTripStatus_FullMethodName     = "/artisan.watchdog.Watchdog/GetSecurityTripStatus"
+	Watchdog_GetVersionInfo_FullMethodName            = "/artisan.watchdog.Watchdog/GetVersionInfo"
+	Watchdog_ExecuteCommand_FullMethodName            = "/artisan.watchdog.Watchdog/ExecuteCommand"
+	Watchdog_QueryUsage_FullMethodName                = "/artisan.watchdog.Watchdog/QueryUsage"
+	Watchdog_ListExpectedApps_FullMethodName          = "/artisan.watchdog.Watchdog/ListExpectedApps"
+	Watchdog_GetConfigFile_FullMethodName             = "/artisan.watchdog.Watchdog/GetConfigFile"
+	Watchdog_SetConfigFile_FullMethodName             = "/artisan.watchdog.Watchdog/SetConfigFile"
+	Watchdog_RecalculateAllowedClients_FullMethodName = "/artisan.watchdog.Watchdog/RecalculateAllowedClients"
 )
 
 // WatchdogClient is the client API for Watchdog service.
@@ -53,6 +54,7 @@ type WatchdogClient interface {
 	ListExpectedApps(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ExpectedAppsList, error)
 	GetConfigFile(ctx context.Context, in *GetConfigFileRequest, opts ...grpc.CallOption) (*GetConfigFileResponse, error)
 	SetConfigFile(ctx context.Context, in *SetConfigFileRequest, opts ...grpc.CallOption) (*SetConfigFileResponse, error)
+	RecalculateAllowedClients(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*CommandResponse, error)
 }
 
 type watchdogClient struct {
@@ -203,6 +205,16 @@ func (c *watchdogClient) SetConfigFile(ctx context.Context, in *SetConfigFileReq
 	return out, nil
 }
 
+func (c *watchdogClient) RecalculateAllowedClients(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*CommandResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CommandResponse)
+	err := c.cc.Invoke(ctx, Watchdog_RecalculateAllowedClients_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WatchdogServer is the server API for Watchdog service.
 // All implementations must embed UnimplementedWatchdogServer
 // for forward compatibility.
@@ -221,6 +233,7 @@ type WatchdogServer interface {
 	ListExpectedApps(context.Context, *Empty) (*ExpectedAppsList, error)
 	GetConfigFile(context.Context, *GetConfigFileRequest) (*GetConfigFileResponse, error)
 	SetConfigFile(context.Context, *SetConfigFileRequest) (*SetConfigFileResponse, error)
+	RecalculateAllowedClients(context.Context, *Empty) (*CommandResponse, error)
 	mustEmbedUnimplementedWatchdogServer()
 }
 
@@ -272,6 +285,9 @@ func (UnimplementedWatchdogServer) GetConfigFile(context.Context, *GetConfigFile
 }
 func (UnimplementedWatchdogServer) SetConfigFile(context.Context, *SetConfigFileRequest) (*SetConfigFileResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetConfigFile not implemented")
+}
+func (UnimplementedWatchdogServer) RecalculateAllowedClients(context.Context, *Empty) (*CommandResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RecalculateAllowedClients not implemented")
 }
 func (UnimplementedWatchdogServer) mustEmbedUnimplementedWatchdogServer() {}
 func (UnimplementedWatchdogServer) testEmbeddedByValue()                  {}
@@ -546,6 +562,24 @@ func _Watchdog_SetConfigFile_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Watchdog_RecalculateAllowedClients_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).RecalculateAllowedClients(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_RecalculateAllowedClients_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).RecalculateAllowedClients(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Watchdog_ServiceDesc is the grpc.ServiceDesc for Watchdog service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -608,6 +642,10 @@ var Watchdog_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetConfigFile",
 			Handler:    _Watchdog_SetConfigFile_Handler,
+		},
+		{
+			MethodName: "RecalculateAllowedClients",
+			Handler:    _Watchdog_RecalculateAllowedClients_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

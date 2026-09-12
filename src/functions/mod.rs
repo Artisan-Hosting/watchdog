@@ -7,7 +7,7 @@ pub mod verification;
 
 pub use inventory::{
     generate_safe_client_runner_list, get_all_ipv4, monitor_client_inventory,
-    refresh_client_inventory_once,
+    refresh_client_inventory_once, seed_placeholder_client_statuses, auto_build_safe_clients,
 };
 pub use monitoring::{
     CommandStubResult, ProcessStoreHandle, ProcessStoreKind, configure_client_runtime_command,

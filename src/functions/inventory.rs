@@ -235,7 +235,7 @@ fn is_valid_toml_file(path: &Path) -> Result<bool, io::Error> {
     Ok(toml::from_str::<toml::Value>(&raw).is_ok())
 }
 
-async fn seed_placeholder_client_statuses(
+pub async fn seed_placeholder_client_statuses(
     client_status_store: &definitions::ClientApplicationStatusStore,
     safe_clients: &[String],
 ) {
@@ -257,7 +257,7 @@ async fn seed_placeholder_client_statuses(
     }
 }
 
-async fn auto_build_safe_clients(
+pub async fn auto_build_safe_clients(
     inventory_store: &ClientInventoryStore,
     build_status_store: &definitions::BuildStatusStore,
     safe_clients: Vec<String>,
