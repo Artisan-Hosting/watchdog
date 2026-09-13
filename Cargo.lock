@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "ais_watchdog"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "artisan_middleware",
  "aya",
@@ -171,7 +171,7 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "artisan_middleware"
-version = "5.7.2"
+version = "5.8.0"
 dependencies = [
  "acai_core",
  "aes-gcm",

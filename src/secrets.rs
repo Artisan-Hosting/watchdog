@@ -41,17 +41,6 @@ const NODE_PASSPHRASE_SECRET_KEY: &str = "bundle_passphrase";
 /// 4 * 16 hex chars = 256 bits of entropy.
 const PASSPHRASE_WORDS: usize = 4;
 
-/// The exact text sqlx surfaces for "no rows" (see `ais_secretserver`'s
-/// `secret::get_secret`, `sqlx::Error::RowNotFound`'s `Display`), which its
-/// gRPC handler wraps into a generic `Status::internal` with no distinct
-/// not-found code. Matching on it is what lets us tell "doesn't exist yet,
-/// safe to provision" apart from a real outage -- fragile, but the
-/// alternative (provisioning a fresh passphrase on *any* error) risks
-/// orphaning every bundle already encrypted with the real one. A proper
-/// not-found status on `ais_secretserver`'s side would let this go away.
-const NOT_FOUND_MARKER: &str =
-    "no rows returned by a query that expected to return at least one row";
-
 fn rpc_err(context: &str, status: tonic::Status) -> ErrorArrayItem {
     ErrorArrayItem::new(Errors::Network, format!("{context}: {status}"))
 }
@@ -74,7 +63,11 @@ impl SecretClient {
     }
 
     /// `Ok(None)` means "confirmed absent, safe to provision"; any other
-    /// failure is a real error the caller must not paper over.
+    /// failure is a real error the caller must not paper over. Relies on
+    /// `ais_secretserver`'s `GetSecret` status-code contract (see
+    /// `secret.proto`): `NotFound` is the only code that means "absent",
+    /// everything else (typically `Internal`) is a genuine failure -- never
+    /// match on `status.message()` text, which is free to change.
     async fn get(
         &mut self,
         secret_key: &str,
@@ -90,7 +83,7 @@ impl SecretClient {
 
         match self.client.get_secret(request).await {
             Ok(response) => Ok(Some(response.into_inner().value)),
-            Err(status) if status.message().contains(NOT_FOUND_MARKER) => Ok(None),
+            Err(status) if status.code() == tonic::Code::NotFound => Ok(None),
             Err(status) => Err(rpc_err("get_secret", status)),
         }
     }
