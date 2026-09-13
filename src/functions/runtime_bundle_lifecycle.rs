@@ -158,10 +158,21 @@ pub async fn try_write_bundle_kind(
             let fixed: Enviornment_V2 = toml::from_str(content)
                 .map_err(|err| ErrorArrayItem::new(Errors::ConfigParsing, err.to_string()))?;
             runtime_bundle::commit_fixed_config(&bundle, &fixed, &passphrase)?;
+            let config_dir = conf_dir().join(ais_name);
+            if config_dir.exists() {
+                let _ = runtime_bundle::unpack_control_plane_config(&bundle, &passphrase, &config_dir);
+                ensure_control_plane_ownership(Some(&fixed), &config_dir);
+            }
         }
         ConfigFileKind::Custom => {
             let custom = CustomConfig::from_json(content)?;
             runtime_bundle::commit_custom_config(&bundle, &custom, &passphrase)?;
+            let config_dir = conf_dir().join(ais_name);
+            if config_dir.exists() {
+                let _ = runtime_bundle::unpack_control_plane_config(&bundle, &passphrase, &config_dir);
+                let fixed = runtime_bundle::read_fixed_config(&bundle, &passphrase).ok();
+                ensure_control_plane_ownership(fixed.as_ref(), &config_dir);
+            }
         }
         ConfigFileKind::BundleEnv => {
             runtime_bundle::commit_env(&bundle, content, &passphrase)?;
@@ -727,8 +738,90 @@ pub async fn prepare_for_start(ais_name: &str, node_id: u64) -> Result<Option<St
     let config_dir = conf_dir().join(ais_name);
     runtime_bundle::unpack_control_plane_config(&bundle, &passphrase, &config_dir)?;
 
+    let fixed = runtime_bundle::read_fixed_config(&bundle, &passphrase).ok();
+    ensure_control_plane_ownership(fixed.as_ref(), &config_dir);
+
     let env_content = runtime_bundle::read_env(&bundle, &passphrase)?;
     Ok(Some(env_content))
+}
+
+/// Ensures that unpacked `runtime.toml` and `custom.json` control-plane files
+/// in `config_dir` are owned by the UID and GID that the child process will run as.
+///
+/// Target UID/GID are derived from `fixed.execution_uid` and `fixed.execution_gid`
+/// when present. If omitted (`None`), they default to `WWW_DATA_UID` / `WWW_DATA_GID`
+/// (or `0:0` if `--client-root` is set).
+pub fn ensure_control_plane_ownership(
+    fixed: Option<&Enviornment_V2>,
+    config_dir: &std::path::Path,
+) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{chown, MetadataExt};
+
+        let is_client_root = crate::runtime_flags::runtime_flags().client_root;
+        let target_uid = if is_client_root {
+            0
+        } else {
+            fixed
+                .and_then(|f| f.execution_uid)
+                .map(u32::from)
+                .unwrap_or(crate::definitions::WWW_DATA_UID)
+        };
+
+        let target_gid = if is_client_root {
+            0
+        } else {
+            fixed
+                .and_then(|f| f.execution_gid)
+                .map(u32::from)
+                .unwrap_or(crate::definitions::WWW_DATA_GID)
+        };
+
+        let runtime_toml = config_dir.join(runtime_bundle::FIXED_CONFIG_ENTRY);
+        let custom_json = config_dir.join(runtime_bundle::CUSTOM_CONFIG_ENTRY);
+
+        for path in [&runtime_toml, &custom_json] {
+            if !path.exists() {
+                continue;
+            }
+            match path.metadata() {
+                Ok(meta) => {
+                    let current_uid = meta.uid();
+                    let current_gid = meta.gid();
+                    if current_uid != target_uid || current_gid != target_gid {
+                        log!(
+                            LogLevel::Info,
+                            "Chowning {} from {}:{} to target process UID/GID {}:{}",
+                            path.display(),
+                            current_uid,
+                            current_gid,
+                            target_uid,
+                            target_gid
+                        );
+                        if let Err(err) = chown(path, Some(target_uid), Some(target_gid)) {
+                            log!(
+                                LogLevel::Warn,
+                                "Failed to chown {} to {}:{}: {}",
+                                path.display(),
+                                target_uid,
+                                target_gid,
+                                err
+                            );
+                        }
+                    }
+                }
+                Err(err) => {
+                    log!(
+                        LogLevel::Warn,
+                        "Failed to inspect metadata for {}: {}",
+                        path.display(),
+                        err
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Parses `.env`-style `KEY=value` text (one pair per line, blank lines and
@@ -916,5 +1009,39 @@ environment = "production"
                 ("DB_URL".to_string(), "mysql://x".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn test_ensure_control_plane_ownership_executes_without_errors() {
+        let dir = scratch_config_dir("ownership_test");
+        let runtime_path = dir.join("runtime.toml");
+        let custom_path = dir.join("custom.json");
+        fs::write(&runtime_path, "[app_specific]\nrun_command = \"node server.js\"\n").unwrap();
+        fs::write(&custom_path, "{}").unwrap();
+
+        let sample_toml = r#"
+app_name = "ais_test"
+run_command = "node server.js"
+environment = "production"
+monitor_path = "/tmp"
+project_path = "/tmp"
+interval_seconds = 30
+max_ram_usage = 512
+max_cpu_usage = 80
+debug_mode = false
+log_level = "Info"
+changes_needed = 0
+ignored_subdirs = []
+execution_uid = 1000
+execution_gid = 1000
+"#;
+        let sample_fixed: Enviornment_V2 = toml::from_str(sample_toml).unwrap();
+
+        ensure_control_plane_ownership(Some(&sample_fixed), &dir);
+
+        assert!(runtime_path.exists());
+        assert!(custom_path.exists());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

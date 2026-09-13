@@ -249,12 +249,66 @@ async fn clear_skip_streak(task: &'static str) {
     }
 }
 
+/// Reaps any tracked child that has exited on its own (crashed, or otherwise died
+/// without going through `kill()`).
+///
+/// `SupervisedChild` wraps a `tokio::process::Child` that only gets waited on when
+/// something calls `try_wait`/`wait` on it; a raw `kill(pid, 0)` liveness check can't
+/// tell a zombie from a running process; and nothing else in this loop ever polled
+/// exit status. Without this pass, a crashed app sat in the process store as a
+/// zombie until an operator noticed and restarted it by hand.
+async fn reap_exited_children(
+    process_store: &definitions::ChildProcessArray,
+) -> Result<(), ErrorArrayItem> {
+    let names: Vec<String> = {
+        let processes = process_store
+            .try_read_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
+            .await?;
+        processes.keys().cloned().collect()
+    };
+
+    for name in names {
+        let mut processes = process_store
+            .try_write_with_timeout(Some(PROCESS_STORE_LOCK_TIMEOUT))
+            .await?;
+
+        let Some(definitions::SupervisedProcesses::Child(child)) = processes.get(&name) else {
+            continue;
+        };
+
+        match child.try_wait().await {
+            Ok(Some(status)) => {
+                log!(
+                    LogLevel::Warn,
+                    "{} exited unexpectedly (status={}); reaped and removed from process store",
+                    name,
+                    status
+                );
+                processes.remove(&name);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                log!(
+                    LogLevel::Trace,
+                    "Failed to check exit status for {}: {}",
+                    name,
+                    err.err_mesg
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn refresh_runtime_health_and_network(
     process_store: &definitions::ChildProcessArray,
     system_status_store: &definitions::SystemApplicationStatusStore,
     client_status_store: &definitions::ClientApplicationStatusStore,
     check_stdx: bool,
 ) -> Result<(), ErrorArrayItem> {
+    reap_exited_children(process_store).await?;
+
     let mut runtime_snapshots: HashMap<String, RuntimeSnapshot> = HashMap::new();
     let process_names: Vec<String> = {
         let processes = process_store
@@ -333,7 +387,7 @@ async fn collect_runtime_snapshot_for_process(
             }
 
             let mut metrics = child.get_metrics().await.ok();
-            backfill_tree_usage_metrics(name, &child.monitor, &mut metrics).await;
+            backfill_tree_usage_metrics(name, child.monitor(), &mut metrics).await;
             if let Some(metrics) = metrics {
                 snapshot.cpu_usage = Some(metrics.cpu_usage);
                 snapshot.memory_usage = Some(metrics.memory_usage);
@@ -348,7 +402,7 @@ async fn collect_runtime_snapshot_for_process(
             ensure_resource_monitor_healthy_for_process(name, proc).await;
 
             let mut metrics = proc.get_metrics().await.ok();
-            backfill_tree_usage_metrics(name, &proc.monitor, &mut metrics).await;
+            backfill_tree_usage_metrics(name, proc.monitor(), &mut metrics).await;
             if let Some(metrics) = metrics {
                 snapshot.cpu_usage = Some(metrics.cpu_usage);
                 snapshot.memory_usage = Some(metrics.memory_usage);
