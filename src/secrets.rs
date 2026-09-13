@@ -185,6 +185,84 @@ impl SecretClient {
         }
         Ok(lines)
     }
+
+    /// Creates one arbitrary-app secret. Unlike `create` (hardcoded to the
+    /// node-passphrase sentinel), `runner_id` is a real app id here. Returns
+    /// `Ok(false)` rather than an error when the write is rejected --
+    /// `ais_secretserver`'s `create_secret` handler collapses every DB error
+    /// (a genuine outage as much as a duplicate-key conflict from a key
+    /// that's already there) into `SimpleSecretResponse { success: false }`
+    /// with no distinguishing text, so a "false" here is treated as "already
+    /// present, nothing to do" by the only caller (`seed_from_env_lines`),
+    /// not as a fatal problem.
+    async fn create_app_secret(
+        &mut self,
+        runner_id: &str,
+        environment_id: &str,
+        secret_key: &str,
+        value: &str,
+    ) -> Result<bool, ErrorArrayItem> {
+        let request = proto::CreateSecretRequest {
+            runner_id: runner_id.to_owned(),
+            environment_id: environment_id.to_owned(),
+            secret_key: secret_key.to_owned(),
+            value: value.to_owned(),
+            actor: "watchdog".to_owned(),
+        };
+
+        let response = self
+            .client
+            .create_secret(request)
+            .await
+            .map_err(|status| rpc_err("create_secret", status))?
+            .into_inner();
+
+        Ok(response.success)
+    }
+
+    /// Seeds secret-server with `env_content`'s `KEY=value` pairs for
+    /// `runner_id`/`environment_id`, one `CreateSecret` call per key.
+    ///
+    /// This is the missing half of E7/E10's bootstrap story: migration
+    /// already *pulls* secret-server's record down when one exists, but
+    /// until this, nothing ever *pushed* a legacy node-local `.env` file's
+    /// content up in the first place -- so an app with real secrets on one
+    /// instance's disk and no secret-server record at all would migrate
+    /// that instance correctly, but leave every other instance (and secret-
+    /// server itself) with nothing to pull, and worse, Manager's periodic
+    /// relay (which always pushes exactly what it reads back from
+    /// secret-server) would eventually overwrite that instance's bundle
+    /// with empty content too. Called only when secret-server was just
+    /// confirmed to have nothing for this app -- never used to overwrite an
+    /// existing record, only to fill a gap the first time it's found.
+    ///
+    /// A key that already exists (`create_app_secret` returning `Ok(false)`)
+    /// is logged and skipped, not an error -- this can legitimately happen
+    /// if another instance of the same app is seeding concurrently. Only a
+    /// real transport/RPC failure fails the whole call.
+    pub async fn seed_from_env_lines(
+        &mut self,
+        runner_id: &str,
+        environment_id: &str,
+        env_content: &str,
+    ) -> Result<(), ErrorArrayItem> {
+        for (key, value) in crate::functions::runtime_bundle_lifecycle::parse_env_lines(env_content) {
+            match self.create_app_secret(runner_id, environment_id, &key, &value).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    log!(
+                        LogLevel::Debug,
+                        "Seeding secret-server: '{}' already has a value for {}/{} (likely raced with another instance); leaving it as-is",
+                        key,
+                        runner_id,
+                        environment_id
+                    );
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(())
+    }
 }
 
 fn generate_passphrase() -> String {

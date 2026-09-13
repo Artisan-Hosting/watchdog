@@ -12,6 +12,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+use artisan_middleware::config::{Aggregator, DatabaseConfig, GitConfig};
 use artisan_middleware::custom_config::CustomConfig;
 use artisan_middleware::dusa_collection_utils::{
     core::errors::{ErrorArrayItem, Errors},
@@ -20,6 +21,7 @@ use artisan_middleware::dusa_collection_utils::{
 };
 use artisan_middleware::enviornment::definitions::Enviornment_V2;
 use artisan_middleware::runtime_bundle;
+use serde::Deserialize;
 
 use crate::functions::config_files::{
     conf_dir, sha256_hex, validate_ais_name, ConfigFileKind, ConfigFileRead, ConfigFileWrite,
@@ -182,16 +184,341 @@ pub async fn try_write_bundle_kind(
     }))
 }
 
+/// Parses `content` as TOML for migration purposes. Real deployed
+/// `Config.toml`/`Overrides.toml` files drift over time -- hand edits, a
+/// stray unescaped character, whatever -- and a syntax error anywhere in the
+/// file must not cost us every field in it. Real `toml::from_str` is tried
+/// first (it's the accurate parser: it gets quoting, escaping, arrays, and
+/// nested tables right), and only on a genuine syntax error do we fall back
+/// to [`loose_parse_toml`], which walks the file line by line and simply
+/// skips whatever it can't make sense of.
 fn parse_toml_table(content: &str) -> toml::value::Table {
     match toml::from_str::<toml::Value>(content) {
         Ok(toml::Value::Table(table)) => table,
-        _ => toml::value::Table::new(),
+        _ => loose_parse_toml(content),
     }
+}
+
+/// A lossy, line-by-line TOML reader used only as a fallback when real TOML
+/// parsing fails outright. Understands `[section]` headers (one level deep,
+/// which is all these files ever use), `key = value` lines, `#` comments
+/// (ignored unless inside quotes), quoted and bare scalar values, and
+/// `[a, b, c]` string arrays (the only array shape `ignored_subdirs` uses).
+/// A line that doesn't fit any of that is simply skipped -- migration should
+/// lose the one field, not the whole file.
+fn loose_parse_toml(content: &str) -> toml::value::Table {
+    let mut root = toml::value::Table::new();
+    let mut current_section: Option<String> = None;
+
+    for raw_line in content.lines() {
+        let line = strip_comment(raw_line).trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some(section) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            let section = section.trim();
+            if section.is_empty() || section.contains('[') {
+                continue;
+            }
+            current_section = Some(section.to_owned());
+            root.entry(section.to_owned())
+                .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+            continue;
+        }
+
+        let Some((key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim();
+        let Some(value) = parse_loose_value(raw_value.trim()) else {
+            continue;
+        };
+        if key.is_empty() {
+            continue;
+        }
+
+        match &current_section {
+            Some(section) => {
+                if let Some(toml::Value::Table(table)) = root.get_mut(section) {
+                    table.insert(key.to_owned(), value);
+                }
+            }
+            None => {
+                root.insert(key.to_owned(), value);
+            }
+        }
+    }
+
+    root
+}
+
+/// Strips a trailing `#` comment from a line, respecting quotes so a literal
+/// `#` inside a quoted value (a credentials path, say) isn't mistaken for one.
+fn strip_comment(line: &str) -> &str {
+    let mut in_quotes = false;
+    let mut quote_char = '"';
+    for (idx, ch) in line.char_indices() {
+        match ch {
+            '"' | '\'' if !in_quotes => {
+                in_quotes = true;
+                quote_char = ch;
+            }
+            c if in_quotes && c == quote_char => in_quotes = false,
+            '#' if !in_quotes => return &line[..idx],
+            _ => {}
+        }
+    }
+    line
+}
+
+/// Coerces one value's textual form into a `toml::Value` on a best-effort
+/// basis: a quoted string unwraps to `String`; `true`/`false` (any case) to
+/// `Boolean`; a bare integer/float to `Integer`/`Float`; `[ ... ]` to an
+/// `Array` of `String`s; anything else (including an empty value) falls back
+/// to `String` so a stray unquoted word doesn't just vanish. Returns `None`
+/// only when there's truly nothing to read.
+fn parse_loose_value(raw: &str) -> Option<toml::Value> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    if let Some(inner) = strip_matching_quotes(raw) {
+        return Some(toml::Value::String(inner.to_owned()));
+    }
+
+    if let Some(inner) = raw.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        let items = inner
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(|item| strip_matching_quotes(item).unwrap_or(item).to_owned())
+            .map(toml::Value::String)
+            .collect();
+        return Some(toml::Value::Array(items));
+    }
+
+    match raw.to_ascii_lowercase().as_str() {
+        "true" => return Some(toml::Value::Boolean(true)),
+        "false" => return Some(toml::Value::Boolean(false)),
+        _ => {}
+    }
+    if let Ok(i) = raw.parse::<i64>() {
+        return Some(toml::Value::Integer(i));
+    }
+    if let Ok(f) = raw.parse::<f64>() {
+        return Some(toml::Value::Float(f));
+    }
+
+    Some(toml::Value::String(raw.to_owned()))
+}
+
+fn strip_matching_quotes(raw: &str) -> Option<&str> {
+    let bytes = raw.as_bytes();
+    if bytes.len() >= 2 {
+        let (first, last) = (bytes[0], bytes[bytes.len() - 1]);
+        if (first == b'"' || first == b'\'') && first == last {
+            return Some(&raw[1..raw.len() - 1]);
+        }
+    }
+    None
 }
 
 fn merge_into(base: &mut toml::value::Table, overlay: toml::value::Table) {
     for (key, value) in overlay {
         base.insert(key, value);
+    }
+}
+
+/// Required (non-`Option`) scalar fields, coerced to the type
+/// `Enviornment_V2` needs before the final typed deserialize -- real legacy
+/// files are inconsistent about quoting numbers (`max_ram_usage = "512"`
+/// alongside `interval_seconds = 30` in the same file is common), and a
+/// strict deserialize rejects a string where it expects an integer. On a
+/// value that can't be coerced at all, falls back to `defaults`' value
+/// rather than leaving the field missing (these aren't `Option` fields).
+const REQUIRED_INT_FIELDS: &[&str] =
+    &["max_ram_usage", "max_cpu_usage", "interval_seconds", "changes_needed"];
+const REQUIRED_BOOL_FIELDS: &[&str] = &["debug_mode"];
+const REQUIRED_STRING_FIELDS: &[&str] =
+    &["app_name", "environment", "monitor_path", "project_path", "run_command"];
+/// `Option<u16>` fields: coerced like the required ints, but simply dropped
+/// (falling back to `None`) rather than defaulted when uncoercible.
+const OPTIONAL_INT_FIELDS: &[&str] = &["execution_uid", "execution_gid", "primary_listening_port"];
+/// `Option<Stringy>` fields: coerced defensively, dropped when the value is
+/// a shape (table/array) that can't reasonably become a string.
+const OPTIONAL_STRING_FIELDS: &[&str] =
+    &["install_command", "build_command", "path_modifier", "pre_build_command"];
+const KNOWN_LOG_LEVELS: &[&str] = &["Error", "Warn", "Info", "Debug", "Trace"];
+const KNOWN_APPLICATION_TYPES: &[&str] = &["Simple", "Next", "Angular", "Python", "Custom"];
+
+/// Best-effort-coerces every field `Enviornment_V2` cares about in place, so
+/// the final typed deserialize essentially can't fail on a legacy file's
+/// quoting/casing quirks -- it costs one field to a default or `None`, never
+/// the whole migration.
+fn sanitize_fixed_table(table: &mut toml::value::Table, defaults: &toml::value::Table) {
+    for &field in REQUIRED_INT_FIELDS {
+        coerce_or_default(table, defaults, field, coerce_int);
+    }
+    for &field in REQUIRED_BOOL_FIELDS {
+        coerce_or_default(table, defaults, field, coerce_bool);
+    }
+    for &field in REQUIRED_STRING_FIELDS {
+        coerce_or_default(table, defaults, field, coerce_string);
+    }
+    coerce_or_default(table, defaults, "ignored_subdirs", coerce_string_array);
+    coerce_enum_or_default(table, defaults, "log_level", KNOWN_LOG_LEVELS);
+
+    for &field in OPTIONAL_INT_FIELDS {
+        coerce_or_drop(table, field, coerce_int);
+    }
+    for &field in OPTIONAL_STRING_FIELDS {
+        coerce_or_drop(table, field, coerce_string);
+    }
+    coerce_enum_or_drop(table, "application_type", KNOWN_APPLICATION_TYPES);
+
+    drop_if_invalid::<GitConfig>(table, "git");
+    drop_if_invalid::<DatabaseConfig>(table, "database");
+    drop_if_invalid::<Aggregator>(table, "aggregator");
+}
+
+fn coerce_or_default(
+    table: &mut toml::value::Table,
+    defaults: &toml::value::Table,
+    field: &str,
+    coerce: impl Fn(&toml::Value) -> Option<toml::Value>,
+) {
+    let coerced = table.get(field).and_then(coerce);
+    match coerced {
+        Some(value) => {
+            table.insert(field.to_owned(), value);
+        }
+        None => {
+            if let Some(default) = defaults.get(field) {
+                table.insert(field.to_owned(), default.clone());
+            }
+        }
+    }
+}
+
+fn coerce_or_drop(
+    table: &mut toml::value::Table,
+    field: &str,
+    coerce: impl Fn(&toml::Value) -> Option<toml::Value>,
+) {
+    let Some(value) = table.get(field) else {
+        return;
+    };
+    match coerce(value) {
+        Some(coerced) => {
+            table.insert(field.to_owned(), coerced);
+        }
+        None => {
+            table.remove(field);
+        }
+    }
+}
+
+fn coerce_enum_or_default(
+    table: &mut toml::value::Table,
+    defaults: &toml::value::Table,
+    field: &str,
+    variants: &[&str],
+) {
+    let matched = table
+        .get(field)
+        .and_then(toml::Value::as_str)
+        .and_then(|s| variants.iter().find(|v| v.eq_ignore_ascii_case(s)));
+    match matched {
+        Some(variant) => {
+            table.insert(field.to_owned(), toml::Value::String((*variant).to_owned()));
+        }
+        None => {
+            if let Some(default) = defaults.get(field) {
+                table.insert(field.to_owned(), default.clone());
+            }
+        }
+    }
+}
+
+fn coerce_enum_or_drop(table: &mut toml::value::Table, field: &str, variants: &[&str]) {
+    let Some(raw) = table.get(field).and_then(toml::Value::as_str) else {
+        // Not a string at all (or absent) -- drop rather than guess.
+        if table.contains_key(field) {
+            table.remove(field);
+        }
+        return;
+    };
+    match variants.iter().find(|v| v.eq_ignore_ascii_case(raw)) {
+        Some(variant) => {
+            table.insert(field.to_owned(), toml::Value::String((*variant).to_owned()));
+        }
+        None => {
+            table.remove(field);
+        }
+    }
+}
+
+/// Removes `field` from `table` if present but its value doesn't deserialize
+/// as `T` -- used for the optional nested-table fields (`git`, `database`,
+/// `aggregator`) where a best-effort scalar coercion doesn't make sense.
+fn drop_if_invalid<T: for<'de> Deserialize<'de>>(table: &mut toml::value::Table, field: &str) {
+    let Some(value) = table.get(field) else {
+        return;
+    };
+    if T::deserialize(value.clone()).is_err() {
+        table.remove(field);
+    }
+}
+
+fn coerce_int(value: &toml::Value) -> Option<toml::Value> {
+    match value {
+        toml::Value::Integer(_) => Some(value.clone()),
+        toml::Value::Float(f) => Some(toml::Value::Integer(*f as i64)),
+        toml::Value::String(s) => s.trim().parse::<i64>().ok().map(toml::Value::Integer),
+        _ => None,
+    }
+}
+
+fn coerce_bool(value: &toml::Value) -> Option<toml::Value> {
+    match value {
+        toml::Value::Boolean(_) => Some(value.clone()),
+        toml::Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" => Some(toml::Value::Boolean(true)),
+            "false" => Some(toml::Value::Boolean(false)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn coerce_string(value: &toml::Value) -> Option<toml::Value> {
+    match value {
+        toml::Value::String(_) => Some(value.clone()),
+        toml::Value::Integer(i) => Some(toml::Value::String(i.to_string())),
+        toml::Value::Float(f) => Some(toml::Value::String(f.to_string())),
+        toml::Value::Boolean(b) => Some(toml::Value::String(b.to_string())),
+        _ => None,
+    }
+}
+
+fn coerce_string_array(value: &toml::Value) -> Option<toml::Value> {
+    match value {
+        toml::Value::Array(items) => {
+            let strings: Vec<toml::Value> = items
+                .iter()
+                .filter_map(|item| match item {
+                    toml::Value::String(_) => Some(item.clone()),
+                    toml::Value::Integer(i) => Some(toml::Value::String(i.to_string())),
+                    toml::Value::Float(f) => Some(toml::Value::String(f.to_string())),
+                    toml::Value::Boolean(b) => Some(toml::Value::String(b.to_string())),
+                    _ => None,
+                })
+                .collect();
+            Some(toml::Value::Array(strings))
+        }
+        _ => None,
     }
 }
 
@@ -246,7 +573,8 @@ fn build_fixed_config_from_legacy_files(
     ais_name: &str,
     config_dir: &std::path::Path,
 ) -> Result<(Enviornment_V2, String), ErrorArrayItem> {
-    let mut fixed_table = default_fixed_config_table(ais_name);
+    let defaults = default_fixed_config_table(ais_name);
+    let mut fixed_table = defaults.clone();
 
     if let Ok(content) = fs::read_to_string(config_dir.join("Config.toml")) {
         let root = parse_toml_table(&content);
@@ -271,6 +599,8 @@ fn build_fixed_config_from_legacy_files(
         .map(PathBuf::from)
         .unwrap_or_else(|| config_dir.join(".env"));
     fixed_table.remove("secret_server_addr");
+
+    sanitize_fixed_table(&mut fixed_table, &defaults);
 
     let toml_text = toml::to_string(&toml::Value::Table(fixed_table)).map_err(|err| {
         ErrorArrayItem::new(Errors::ConfigParsing, format!("Assembling merged config: {err}"))
@@ -330,7 +660,29 @@ pub async fn migrate_app_to_bundle(
         .await
     {
         Ok(remote) if !remote.is_empty() => remote,
-        Ok(_) => local_env_content,
+        Ok(_) => {
+            // Secret-server confirmed empty. If this instance's own legacy
+            // .env file has real content, this is the "first instance to
+            // migrate" case -- push it up now, synchronously, so it becomes
+            // the fleet-wide record other instances (with no local .env at
+            // all) can pull down, and so Manager's periodic relay (which
+            // always pushes down exactly what it reads back from
+            // secret-server) doesn't turn around and wipe this bundle's env
+            // with empty content the moment it next runs. A failure here
+            // propagates (`?`) rather than silently building an unbacked-up
+            // bundle -- this app's migration simply retries next boot.
+            if !local_env_content.trim().is_empty() {
+                secret_client
+                    .seed_from_env_lines(bare_id, &fixed.environment, &local_env_content)
+                    .await?;
+                log!(
+                    LogLevel::Info,
+                    "Seeded secret-server from {}'s local env file (no fleet-wide record existed yet)",
+                    ais_name
+                );
+            }
+            local_env_content
+        }
         Err(err) => {
             log!(
                 LogLevel::Warn,
@@ -479,6 +831,75 @@ environment = "production"
         assert_eq!(fixed.app_name.to_string(), "ais_fresh");
         assert_eq!(fixed.run_command.to_string(), "echo CHANGE_ME");
         assert_eq!(env_content, "");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The exact real-world mess this whole coercion pass exists for: some
+    /// integer fields quoted, some not, plus comments scattered through both
+    /// files -- must still merge into a fully-typed `Enviornment_V2` instead
+    /// of failing the migration.
+    #[test]
+    fn coerces_inconsistently_quoted_integers() {
+        let dir = scratch_config_dir("mixed_quoting");
+        fs::write(
+            dir.join("Config.toml"),
+            r#"
+[app_specific]
+# some of these are quoted, some aren't -- both must work
+interval_seconds = "45"
+changes_needed = 2
+monitor_path = "/opt/artisan/src/demo"
+project_path = "/opt/artisan/src/demo"
+run_command = "node server.js" # inline comment
+"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("Overrides.toml"),
+            r#"
+max_ram_usage = "512"
+max_cpu_usage = 80
+debug_mode = "true"
+log_level = "debug"
+environment = "production"
+"#,
+        )
+        .unwrap();
+
+        let (fixed, _) = build_fixed_config_from_legacy_files("ais_demo", &dir).unwrap();
+
+        assert_eq!(fixed.interval_seconds, 45);
+        assert_eq!(fixed.max_ram_usage, 512);
+        assert_eq!(fixed.max_cpu_usage, 80);
+        assert!(fixed.debug_mode);
+        assert_eq!(format!("{:?}", fixed.log_level), "Debug");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A file with an actual TOML syntax error (unbalanced quotes) must not
+    /// take every other field down with it -- the parser falls back to the
+    /// lossy line walker, which keeps whatever it can still make sense of.
+    #[test]
+    fn falls_back_to_loose_parsing_on_real_syntax_errors() {
+        let dir = scratch_config_dir("syntax_error");
+        fs::write(
+            dir.join("Config.toml"),
+            "[app_specific]\nrun_command = \"node server.js\nchanges_needed = 3\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("Overrides.toml"),
+            "debug_mode = true\nenvironment = \"staging\"\n",
+        )
+        .unwrap();
+
+        let (fixed, _) = build_fixed_config_from_legacy_files("ais_demo", &dir).unwrap();
+
+        assert_eq!(fixed.changes_needed, 3);
+        assert!(fixed.debug_mode);
+        assert_eq!(fixed.environment.to_string(), "staging");
 
         let _ = fs::remove_dir_all(&dir);
     }
