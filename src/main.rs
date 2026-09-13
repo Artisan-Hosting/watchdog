@@ -49,6 +49,7 @@ pub mod ledger;
 pub mod pid_persistence;
 pub mod runtime_flags;
 pub mod scripts;
+pub mod secrets;
 pub mod security_trip;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -156,6 +157,64 @@ async fn main() -> Result<(), ErrorArrayItem> {
             "Initial client inventory scan failed; client placeholders may be delayed: {}",
             err.err_mesg
         );
+    }
+
+    // Phase E, E7: migrate every known app (system and client alike) onto a
+    // `runtime.acai` bundle, before anything is built or spawned below. Bundle
+    // *creation* is universal; which apps actually *read* the bundle instead
+    // of their legacy Config.toml/Overrides.toml/env file is scoped separately
+    // (see `functions::runtime_bundle_lifecycle`'s module docs) -- this step
+    // only ever adds a bundle next to the files an app already has, never
+    // touches or removes them.
+    '_runtime_bundle_migration: {
+        let node_id = match artisan_middleware::identity::Identifier::load_from_file() {
+            Ok(identity) => identity.id,
+            Err(err) => {
+                log!(
+                    LogLevel::Warn,
+                    "Skipping runtime bundle migration; no machine identity yet: {}",
+                    err.err_mesg
+                );
+                break '_runtime_bundle_migration;
+            }
+        };
+
+        let mut secret_client = match secrets::SecretClient::connect().await {
+            Ok(client) => client,
+            Err(err) => {
+                log!(
+                    LogLevel::Error, // Red will catch attention more, ik it's not the right use of error
+                    "Skipping runtime bundle migration; secret-server unreachable: {}",
+                    err.err_mesg
+                );
+                break '_runtime_bundle_migration;
+            }
+        };
+
+        let mut apps: Vec<String> = defs::CRITICAL_APPLICATIONS
+            .iter()
+            .map(|app| app.ais.to_string())
+            .collect();
+        apps.extend(client_inventory_store.read().await.safe_clients.iter().cloned());
+
+        for ais_name in apps {
+            match functions::runtime_bundle_lifecycle::migrate_app_to_bundle(
+                &ais_name,
+                node_id,
+                &mut secret_client,
+            )
+            .await
+            {
+                Ok(true) => log!(LogLevel::Info, "Runtime bundle created for {}", ais_name),
+                Ok(false) => {} // already migrated, nothing to do
+                Err(err) => log!(
+                    LogLevel::Warn,
+                    "Runtime bundle migration failed for {}: {}",
+                    ais_name,
+                    err.err_mesg
+                ),
+            }
+        }
     }
 
     if ebpf::manager().is_active() {
@@ -755,6 +814,13 @@ async fn main() -> Result<(), ErrorArrayItem> {
                 client_applications.len()
             );
 
+            // Phase E, E8: apps on the runtime bundle scheme need their config
+            // unpacked to disk before every spawn -- resolved once here rather
+            // than per task, since it never changes within one watchdog run.
+            let node_id_for_bundles = artisan_middleware::identity::Identifier::load_from_file()
+                .ok()
+                .map(|identity| identity.id);
+
             let mut client_tasks: JoinSet<()> = JoinSet::new();
 
             for client_app in client_applications.iter().cloned() {
@@ -766,6 +832,23 @@ async fn main() -> Result<(), ErrorArrayItem> {
                         "Launching client application {}",
                         client_app
                     );
+
+                    let mut bundle_env_content: Option<String> = None;
+                    if let Some(node_id) = node_id_for_bundles {
+                        match functions::runtime_bundle_lifecycle::prepare_for_start(&client_app, node_id)
+                            .await
+                        {
+                            Ok(content) => bundle_env_content = content,
+                            Err(err) => {
+                                log!(
+                                    LogLevel::Warn,
+                                    "Runtime bundle unpack failed for {}, starting with existing config on disk: {}",
+                                    client_app,
+                                    err.err_mesg
+                                );
+                            }
+                        }
+                    }
 
                     let binary_path =
                         PathType::Content(format!("{}/{}", ARTISAN_BIN_DIR, client_app));
@@ -792,6 +875,14 @@ async fn main() -> Result<(), ErrorArrayItem> {
                         );
                     }
                     configure_client_runtime_command(&mut command, !client_root);
+
+                    if let Some(env_content) = bundle_env_content.as_deref() {
+                        for (key, value) in
+                            functions::runtime_bundle_lifecycle::parse_env_lines(env_content)
+                        {
+                            command.env(key, value);
+                        }
+                    }
 
                     match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
                         Ok(mut child) => {

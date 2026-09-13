@@ -40,19 +40,39 @@ const NEW_DIR_MODE: u32 = 0o750;
 /// an effective optimistic lock when multiple clients edit the same file.
 static CONFIG_MUTATION_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
-/// Which of the two per-application config files is being addressed.
+/// Which per-application config file (or, for the three bundle-backed kinds
+/// added in Phase E, which piece of `runtime.acai`) is being addressed.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ConfigFileKind {
     Config,
     Overrides,
+    /// Phase E, E11: the runtime bundle's fixed structural config
+    /// (`Enviornment_V2`, TOML-shaped). Routed to `runtime_bundle_lifecycle`
+    /// instead of flat-file I/O -- see `try_read_bundle_kind`/
+    /// `try_write_bundle_kind`.
+    Runtime,
+    /// Phase E, E11: the runtime bundle's flexible custom config (JSON-shaped).
+    Custom,
+    /// Phase E, E10: the runtime bundle's arbitrary secrets/env-var content.
+    /// Written only by Manager's secret-server relay, never edited by a
+    /// human through this API directly -- but reuses the same
+    /// `GetConfigFile`/`SetConfigFile` RPCs rather than a bespoke one.
+    BundleEnv,
 }
 
 impl ConfigFileKind {
-    /// Canonical on-disk file name for this kind.
+    /// Canonical on-disk file name for this kind. Not meaningful for the
+    /// three bundle-backed kinds (they're entries inside `runtime.acai`, not
+    /// flat files under `ARTISAN_CONF_DIR/<name>/`) -- `read`/
+    /// `write_config_file_managed` intercept those before this is ever
+    /// called for them.
     pub fn canonical_file_name(&self) -> &'static str {
         match self {
             ConfigFileKind::Config => "Config.toml",
             ConfigFileKind::Overrides => "Overrides.toml",
+            ConfigFileKind::Runtime => "runtime.toml (bundled)",
+            ConfigFileKind::Custom => "custom.json (bundled)",
+            ConfigFileKind::BundleEnv => ".env (bundled)",
         }
     }
 
@@ -61,6 +81,9 @@ impl ConfigFileKind {
         match value {
             1 => Some(ConfigFileKind::Config),
             2 => Some(ConfigFileKind::Overrides),
+            3 => Some(ConfigFileKind::Runtime),
+            4 => Some(ConfigFileKind::Custom),
+            5 => Some(ConfigFileKind::BundleEnv),
             _ => None,
         }
     }
@@ -144,6 +167,11 @@ pub fn resolve_config_file_path(base_dir: &Path, ais_name: &str, kind: ConfigFil
         ConfigFileKind::Config => config_dir.join(kind.canonical_file_name()),
         ConfigFileKind::Overrides => resolve_overrides_path(&config_dir)
             .unwrap_or_else(|| config_dir.join(kind.canonical_file_name())),
+        ConfigFileKind::Runtime | ConfigFileKind::Custom | ConfigFileKind::BundleEnv => {
+            unreachable!(
+                "bundle-backed kinds are intercepted by try_read/write_bundle_kind before reaching flat-file path resolution"
+            )
+        }
     }
 }
 
@@ -187,6 +215,11 @@ pub fn read_config_file(
     let content = match kind {
         ConfigFileKind::Config => placeholder_config_toml(ais_name),
         ConfigFileKind::Overrides => placeholder_overrides_toml(ais_name),
+        ConfigFileKind::Runtime | ConfigFileKind::Custom | ConfigFileKind::BundleEnv => {
+            unreachable!(
+                "bundle-backed kinds are intercepted by try_read/write_bundle_kind before reaching flat-file scaffolding"
+            )
+        }
     };
     atomic_write(&path, &content, None)?;
 
@@ -270,6 +303,12 @@ pub async fn read_config_file_managed(
     kind: ConfigFileKind,
     create_if_missing: bool,
 ) -> Result<ConfigFileRead, ErrorArrayItem> {
+    if let Some(result) =
+        super::runtime_bundle_lifecycle::try_read_bundle_kind(ais_name, kind).await?
+    {
+        return Ok(result);
+    }
+
     if !create_if_missing {
         return read_config_file(base_dir, ais_name, kind, false);
     }
@@ -291,6 +330,17 @@ pub async fn write_config_file_managed(
     content: &str,
     expected_previous_sha256: Option<&str>,
 ) -> Result<ConfigFileWrite, ErrorArrayItem> {
+    if let Some(result) = super::runtime_bundle_lifecycle::try_write_bundle_kind(
+        ais_name,
+        kind,
+        content,
+        expected_previous_sha256,
+    )
+    .await?
+    {
+        return Ok(result);
+    }
+
     let _guard = CONFIG_MUTATION_LOCK.lock().await;
     let result = write_config_file(base_dir, ais_name, kind, content, expected_previous_sha256)?;
     rebaseline_integrity_manifest().await;
@@ -475,7 +525,7 @@ fn is_backup_timestamp(value: &str) -> bool {
     }
 }
 
-fn sha256_hex(content: &str) -> String {
+pub(crate) fn sha256_hex(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     let digest = hasher.finalize();

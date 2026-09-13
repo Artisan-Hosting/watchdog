@@ -3,6 +3,7 @@
 pub mod config_files;
 pub mod inventory;
 pub mod monitoring;
+pub mod runtime_bundle_lifecycle;
 pub mod verification;
 
 pub use inventory::{

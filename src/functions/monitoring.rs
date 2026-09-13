@@ -977,6 +977,39 @@ async fn start_with_handle(
             );
         }
         configure_client_runtime_command(&mut command, run_as_www_data);
+
+        // Phase E, E8: every (re)start of a bundle-consuming client app --
+        // manual or automatic recovery, both funnel through here -- gets a
+        // fresh unpack first. A no-op for apps with no bundle yet.
+        if let Some(node_id) = artisan_middleware::identity::Identifier::load_from_file()
+            .ok()
+            .map(|identity| identity.id)
+        {
+            match crate::functions::runtime_bundle_lifecycle::prepare_for_start(application, node_id)
+                .await
+            {
+                Ok(Some(env_content)) => {
+                    // Set directly on the Command we're about to spawn (generic_runner);
+                    // it never clears its own environment before spawning its own
+                    // child, so this reaches that process too without ever touching
+                    // disk -- see the plan's Phase E, E9/E10 dataflow.
+                    for (key, value) in
+                        crate::functions::runtime_bundle_lifecycle::parse_env_lines(&env_content)
+                    {
+                        command.env(key, value);
+                    }
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    log!(
+                        LogLevel::Warn,
+                        "Runtime bundle unpack failed for {}, starting with existing config on disk: {}",
+                        application,
+                        err.err_mesg
+                    );
+                }
+            }
+        }
     }
     match spawn_complex_process(&mut command, Some(working_dir), true, true).await {
         Ok(mut child) => {
@@ -1065,6 +1098,22 @@ pub async fn stop_application_stub(
 
                         // Remove from store; the process should terminate itself gracefully
                         handle.remove(application).await.ok();
+
+                        // Phase E, E8: the plaintext window is exactly "while
+                        // the process is running" -- clean up immediately
+                        // rather than waiting for the next start. A no-op for
+                        // apps with nothing unpacked (system apps, or one that
+                        // never actually started).
+                        if let Err(err) =
+                            crate::functions::runtime_bundle_lifecycle::cleanup_after_stop(application)
+                        {
+                            log!(
+                                LogLevel::Warn,
+                                "Failed to clean up unpacked runtime config for {}: {}",
+                                application,
+                                err.err_mesg
+                            );
+                        }
 
                         Ok(CommandStubResult::new(
                             true,

@@ -169,6 +169,13 @@ enum ConfigFileKind {
   CONFIG_FILE_KIND_UNSPECIFIED = 0;
   CONFIG_FILE_KIND_CONFIG = 1;
   CONFIG_FILE_KIND_OVERRIDES = 2;
+  // Phase E: the runtime bundle's fixed structural config (Enviornment_V2, TOML-shaped).
+  CONFIG_FILE_KIND_RUNTIME = 3;
+  // Phase E: the runtime bundle's flexible custom config (JSON-shaped).
+  CONFIG_FILE_KIND_CUSTOM = 4;
+  // Phase E: the runtime bundle's arbitrary secrets/env-var content, written
+  // only by Manager's secret-server relay.
+  CONFIG_FILE_KIND_BUNDLE_ENV = 5;
 }
 
 message GetConfigFileRequest {
