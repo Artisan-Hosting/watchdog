@@ -143,15 +143,34 @@ pub async fn try_write_bundle_kind(
     let mut secret_client = SecretClient::connect().await?;
     let passphrase = secret_client.get_or_create_node_passphrase(node_id).await?;
 
+    // Read the prior value up front for two purposes: the optimistic-
+    // concurrency check below (when a caller supplies one -- strict, errors
+    // out if the read itself fails), and detecting whether this write
+    // actually changes anything. The latter matters for `BundleEnv`
+    // specifically: `set_config_file` (`grpc.rs`) only restarts the app on
+    // an actual change, since Manager's secrets-sync loop
+    // (`Manager/src/main.rs`) pushes unconditionally every ~5 minutes
+    // regardless of whether the content changed -- without this, that would
+    // mean an unwanted restart every interval. Best-effort (`.ok()`) when no
+    // concurrency check was requested, since not knowing the prior value
+    // just means treating this as a change, the safe default.
+    let previous_content: Option<String> = if expected_previous_sha256.is_some() {
+        Some(read_bundle_entry(&bundle, kind, &passphrase).await?)
+    } else {
+        read_bundle_entry(&bundle, kind, &passphrase).await.ok()
+    };
+
     if let Some(expected) = expected_previous_sha256 {
-        let current = read_bundle_entry(&bundle, kind, &passphrase).await?;
-        if sha256_hex(&current) != expected {
+        let current_sha = previous_content.as_deref().map(sha256_hex).unwrap_or_default();
+        if current_sha != expected {
             return Err(ErrorArrayItem::new(
                 Errors::GeneralError,
                 "stale sha256; reload the current content and retry",
             ));
         }
     }
+
+    let content_changed = previous_content.as_deref() != Some(content);
 
     match kind {
         ConfigFileKind::Runtime => {
@@ -192,6 +211,7 @@ pub async fn try_write_bundle_kind(
     Ok(Some(ConfigFileWrite {
         backup_file: None,
         path: bundle,
+        content_changed,
     }))
 }
 
