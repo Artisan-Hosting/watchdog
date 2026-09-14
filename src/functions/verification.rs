@@ -377,8 +377,54 @@ fn build_manifest() -> Result<IntegrityManifest, ErrorArrayItem> {
     })
 }
 
+fn is_volatile_file(path: &Path) -> bool {
+    let file_name = match path.file_name().and_then(|n| n.to_str()) {
+        Some(name) => name,
+        None => return false,
+    };
+
+    // Unpacked control-plane files (unpacked on start, removed on stop)
+    if file_name == artisan_middleware::runtime_bundle::FIXED_CONFIG_ENTRY
+        || file_name == artisan_middleware::runtime_bundle::CUSTOM_CONFIG_ENTRY
+        || file_name == ".env"
+    {
+        return true;
+    }
+
+    // Manifest / LEDGER / PID / Tamper / Audit log internal marker files
+    if file_name == ".watchdog_integrity_manifest"
+        || file_name == ".artisan_watchdog_pids"
+        || file_name == ".ais_tamper"
+        || file_name == "security_trip_audit.log"
+    {
+        return true;
+    }
+
+    // Temporary files, backups, state persistence files, logs, sockets, pid files, db journals
+    if file_name.starts_with('.')
+        || file_name.contains(".tmp")
+        || file_name.ends_with(".aold")
+        || file_name.ends_with(".bak")
+        || file_name.ends_with(".pid")
+        || file_name.ends_with(".sock")
+        || file_name.ends_with(".log")
+        || file_name.ends_with(".state")
+        || file_name.ends_with(".db-journal")
+        || file_name.ends_with(".db-shm")
+        || file_name.ends_with(".db-wal")
+    {
+        return true;
+    }
+
+    false
+}
+
 fn collect_files(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), ErrorArrayItem> {
     if !path.exists() {
+        return Ok(());
+    }
+
+    if is_volatile_file(path) {
         return Ok(());
     }
 
@@ -389,12 +435,14 @@ fn collect_files(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), ErrorArra
         )
     })?;
 
-    if metadata.file_type().is_file() {
+    let file_type = metadata.file_type();
+
+    if file_type.is_file() || file_type.is_symlink() {
         output.push(path.to_path_buf());
         return Ok(());
     }
 
-    if !metadata.file_type().is_dir() {
+    if !file_type.is_dir() {
         return Ok(());
     }
 
@@ -417,6 +465,13 @@ fn collect_files(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), ErrorArra
 }
 
 fn hash_file(path: &Path) -> Result<String, ErrorArrayItem> {
+    if let Ok(target) = fs::read_link(path) {
+        let mut hasher = Sha256::new();
+        hasher.update(target.to_string_lossy().as_bytes());
+        let digest = hasher.finalize();
+        return Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect());
+    }
+
     let mut file = File::open(path).map_err(|err| {
         ErrorArrayItem::new(
             Errors::InputOutput,
@@ -684,5 +739,25 @@ pub async fn monitor_runtime_integrity(
     for handle in forwarders {
         handle.abort();
         let _ = handle.await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_volatile_file_filters_unpacked_and_temporary_files() {
+        assert!(is_volatile_file(Path::new("/opt/artisan/etc/ais_demo/runtime.toml")));
+        assert!(is_volatile_file(Path::new("/opt/artisan/etc/ais_demo/custom.json")));
+        assert!(is_volatile_file(Path::new("/opt/artisan/etc/ais_demo/.env")));
+        assert!(is_volatile_file(Path::new("/opt/artisan/etc/ais_demo/app.state")));
+        assert!(is_volatile_file(Path::new("/opt/artisan/etc/ais_demo/Config.toml.aold")));
+        assert!(is_volatile_file(Path::new("/opt/artisan/etc/ais_demo/.Config.tmp.1234")));
+
+        // Static files should NOT be marked volatile
+        assert!(!is_volatile_file(Path::new("/opt/artisan/etc/ais_demo/runtime.acai")));
+        assert!(!is_volatile_file(Path::new("/opt/artisan/etc/git.cf")));
+        assert!(!is_volatile_file(Path::new("/opt/artisan/bin/ais_manager")));
     }
 }

@@ -347,8 +347,7 @@ async fn main() -> Result<(), ErrorArrayItem> {
     }
 
     '_hash_verification: {
-        // FIXME:(integrity) this flag is inverted, because we don't seem to be indexing all the right files, so every boot trips the security imp
-        if !runtime_flags.skip_hash_check() {
+        if runtime_flags.skip_hash_check() {
             log!(
                 LogLevel::Warn,
                 "Startup integrity verification skipped by runtime flags"
