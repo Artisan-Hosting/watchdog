@@ -113,6 +113,55 @@ pub async fn monitor_client_inventory(
             );
         }
 
+        // Bundle migration otherwise only ever runs once, at watchdog's own
+        // startup, for whatever was already safe at that moment (see
+        // `main.rs`'s `'_runtime_bundle_migration` block) -- an app that
+        // becomes safe afterward (e.g. a repo added to this node without a
+        // watchdog restart) would never get a `runtime.acai` bundle, so
+        // Manager's secrets-sync loop would silently skip it forever
+        // (`get_app_environment` returning `Ok(None)` reads as "no bundle
+        // yet, nothing to sync" over there). Running migration here too,
+        // for exactly the apps that just became safe, closes that gap
+        // without needing a restart.
+        if !diff.safe_added.is_empty() {
+            match artisan_middleware::identity::Identifier::load_from_file() {
+                Ok(identity) => match crate::secrets::SecretClient::connect().await {
+                    Ok(mut secret_client) => {
+                        for ais_name in &diff.safe_added {
+                            match super::runtime_bundle_lifecycle::migrate_app_to_bundle(
+                                ais_name,
+                                identity.id,
+                                &mut secret_client,
+                            )
+                            .await
+                            {
+                                Ok(true) => {
+                                    log!(LogLevel::Info, "Runtime bundle created for {}", ais_name)
+                                }
+                                Ok(false) => {} // already migrated, nothing to do
+                                Err(err) => log!(
+                                    LogLevel::Warn,
+                                    "Runtime bundle migration failed for {}: {}",
+                                    ais_name,
+                                    err.err_mesg
+                                ),
+                            }
+                        }
+                    }
+                    Err(err) => log!(
+                        LogLevel::Warn,
+                        "Skipping runtime bundle migration for newly-safe apps; secret-server unreachable: {}",
+                        err.err_mesg
+                    ),
+                },
+                Err(err) => log!(
+                    LogLevel::Warn,
+                    "Skipping runtime bundle migration for newly-safe apps; no machine identity yet: {}",
+                    err.err_mesg
+                ),
+            }
+        }
+
         let safe_clients = {
             let guard = inventory_store.read().await;
             guard.safe_clients.clone()

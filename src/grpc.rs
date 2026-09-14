@@ -608,9 +608,55 @@ impl Watchdog for WatchdogService {
                         err.err_mesg
                     );
                 }
+
+                // Bundle env vars are only ever read once, at process spawn
+                // (injected straight into the child's environment, never
+                // hot-reloaded) -- unlike a Config/Overrides write through
+                // this same RPC, a BundleEnv write needs a restart to
+                // actually take effect, mirroring the restart
+                // `execute_command`'s `Payload::Set` arm already does for
+                // those legacy kinds. Gated on `content_changed` so Manager's
+                // secrets-sync loop (`Manager/src/main.rs`, which pushes
+                // unconditionally every ~5 minutes) doesn't restart the app
+                // on every no-op push.
+                let restart_msg = if kind == config_files::ConfigFileKind::BundleEnv
+                    && result.content_changed
+                {
+                    let stop_res =
+                        functions::stop_application_stub(&msg.application, &self.process_handles)
+                            .await;
+                    let start_res = functions::start_application_stub(
+                        &msg.application,
+                        &self.process_handles,
+                        &self.client_inventory_store,
+                    )
+                    .await;
+
+                    match (stop_res, start_res) {
+                        (Ok(stop), Ok(start)) => format!(
+                            "; restart: stopped accepted={} message={}; started accepted={} message={}",
+                            stop.accepted, stop.message, start.accepted, start.message
+                        ),
+                        (Err(stop_err), Ok(start)) => format!(
+                            "; restart stop failed: {}; started accepted={} message={}",
+                            stop_err.err_mesg, start.accepted, start.message
+                        ),
+                        (Ok(stop), Err(start_err)) => format!(
+                            "; restart: stopped accepted={} message={}; start failed: {}",
+                            stop.accepted, stop.message, start_err.err_mesg
+                        ),
+                        (Err(stop_err), Err(start_err)) => format!(
+                            "; restart failed: stop={}, start={}",
+                            stop_err.err_mesg, start_err.err_mesg
+                        ),
+                    }
+                } else {
+                    String::new()
+                };
+
                 Ok(Response::new(SetConfigFileResponse {
                     accepted: true,
-                    message: format!("wrote {}", result.path.display()),
+                    message: format!("wrote {}{}", result.path.display(), restart_msg),
                     backup_file: result.backup_file.unwrap_or_default(),
                 }))
             }

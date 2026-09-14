@@ -104,6 +104,13 @@ pub struct ConfigFileRead {
 pub struct ConfigFileWrite {
     pub backup_file: Option<String>,
     pub path: PathBuf,
+    /// Whether this write actually changed the stored content (vs. writing
+    /// back the same bytes that were already there). `set_config_file`
+    /// (`grpc.rs`) uses this to decide whether a `BundleEnv` write is worth
+    /// restarting the app for -- Manager's secrets-sync loop pushes
+    /// unconditionally every interval, and a no-op push must not trigger a
+    /// restart every time it runs.
+    pub content_changed: bool,
 }
 
 /// Base directory for application config; debug builds honor
@@ -284,6 +291,8 @@ pub fn write_config_file(
         }
     }
 
+    let content_changed = previous.as_deref() != Some(content);
+
     let backup_file = match previous {
         Some(_) => Some(backup_config_file(&path)?),
         None => None,
@@ -292,7 +301,11 @@ pub fn write_config_file(
     let existing_meta = fs::metadata(&path).ok();
     atomic_write(&path, content, existing_meta.as_ref())?;
 
-    Ok(ConfigFileWrite { backup_file, path })
+    Ok(ConfigFileWrite {
+        backup_file,
+        path,
+        content_changed,
+    })
 }
 
 /// Reads or scaffolds a config file while keeping scaffold mutations and the
