@@ -1005,7 +1005,7 @@ fn application_status_to_proto(
 ) -> ApplicationStatusMessage {
     ApplicationStatusMessage {
         name,
-        status: format!("{:?}", status.status),
+        status: status.status.as_str_name().to_string(),
         cpu_usage: status.cpu_usage,
         memory_usage: status.memory_usage,
         pid: status.pid,

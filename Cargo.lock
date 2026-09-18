@@ -191,7 +191,9 @@ checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
 name = "artisan_middleware"
-version = "6.0.1"
+version = "7.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f08f249ca48398f5a49593d98e2ece77f8747318e0e8cc40122c429bdc37877"
 dependencies = [
  "acai_core",
  "aes-gcm 0.11.1",
@@ -224,6 +226,7 @@ dependencies = [
  "toml",
  "trust-dns-resolver",
  "users",
+ "uuid",
  "walkdir",
 ]
 
@@ -4624,6 +4627,17 @@ name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
+
+[[package]]
+name = "uuid"
+version = "1.26.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
+dependencies = [
+ "getrandom 0.4.3",
+ "js-sys",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "vcpkg"

@@ -5,7 +5,7 @@ version = "2.5.2"
 edition = "2024"
 
 [dependencies]
-artisan_middleware = {path = "/opt/artisan/lib/artisan_lib"}
+artisan_middleware = "7.0.0"
 tokio = { version = "1.53.0", features = ["rt-multi-thread", "macros", "signal", "sync", "process", "time", "net"] }
 chrono = { version = "0.4.45", features = ["clock"] }
 tonic = { version = "0.14.6", features = ["transport"] }
@@ -27,9 +27,8 @@ hmac = "0.13.0"
 byteorder = "1.5"
 getrandom = "0.4.3"
 rand = { version = "0.10.2", features = ["std"] }
-rusqlite = { version = "0.40.1", features = ["bundled"] }
+rusqlite = { version = "0.40.1", features = ["bundled", "functions"] }
 rayon = "1.12.0"
-#artisan_middleware = "6.0.1" 
 
 [target.'cfg(target_os = "linux")'.dependencies]
 aya = { version = "0.14.0", default-features = false }
