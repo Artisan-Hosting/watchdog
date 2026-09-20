@@ -44,6 +44,7 @@ pub mod ebpf;
 pub mod functions;
 pub mod grpc;
 mod intentional_trip;
+mod mtls_client;
 pub mod kernel_watchdog;
 pub mod ledger;
 pub mod pid_persistence;

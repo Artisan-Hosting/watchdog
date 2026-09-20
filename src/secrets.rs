@@ -19,18 +19,18 @@ use artisan_middleware::dusa_collection_utils::{
 use proto::secret_service_client::SecretServiceClient;
 use tonic::transport::Channel;
 
-/// Fixed internal address for `ais_secretserver`, reachable from any node in
-/// the fleet. `ah.internal` is resolved by our own FreeIPA server and this
-/// traffic never leaves the internal network, which is the only reason
-/// plaintext gRPC is acceptable here today.
+/// Default address for `ais_secretserver`, reachable from any node in the
+/// fleet (`ah.internal` is resolved by our own FreeIPA server). The server
+/// requires mutual TLS, so this is `https://`; override with
+/// `AIS_SECRETSERVER_ADDR` (an `http://` value is plaintext, for a local dev
+/// server only). Manager has its own copy of this constant -- keep both in step.
 ///
-/// FIXME(security): this passphrase decrypts every bundle on the node and
-/// travels here in the clear. Move this to TLS (or mTLS) once
-/// `ais_secretserver` terminates it -- plain HTTP was a deliberate "internal
-/// network only, for now" call, not a permanent one. Same gap exists in
-/// `generic_runner`'s own secret-server client and the dashboard-backend's
-/// `SECRET_GRPC_ADDR`; fixing it here should probably happen alongside those.
-pub const SECRET_SERVER_ADDR: &str = "http://secrets.ah.internal:50052";
+/// This connection carries the passphrase that decrypts every bundle on the
+/// node, which is why it is no longer allowed to be plaintext.
+pub const SECRET_SERVER_ADDR: &str = "https://secrets.ah.internal:50052";
+
+/// Name in the server certificate's SAN (what `mtls_ca_tool issue` was given).
+const SECRET_SERVER_TLS_NAME: &str = "ais_secretserver";
 
 /// Reserved secret-server keying convention for a per-node passphrase: not a
 /// real app, so `runner_id` is a fixed sentinel rather than an `ais_<hex>`
@@ -47,19 +47,28 @@ fn rpc_err(context: &str, status: tonic::Status) -> ErrorArrayItem {
 
 pub struct SecretClient {
     client: SecretServiceClient<Channel>,
+    /// This node's service credential (see `mtls_client::load_service_credential`).
+    /// ais_secretserver decides every request against the grants held by it;
+    /// never logged.
+    service_credential: String,
 }
 
 impl SecretClient {
     pub async fn connect() -> Result<Self, ErrorArrayItem> {
-        let client = SecretServiceClient::connect(SECRET_SERVER_ADDR)
+        let net = |detail: String| ErrorArrayItem::new(Errors::Network, detail);
+
+        let addr = std::env::var("AIS_SECRETSERVER_ADDR").unwrap_or_else(|_| SECRET_SERVER_ADDR.to_owned());
+        let service_credential = crate::mtls_client::load_service_credential().map_err(&net)?;
+        let mtls = if crate::mtls_client::wants_tls(&addr) {
+            Some(crate::mtls_client::ClientMtls::load("watchdog").map_err(&net)?)
+        } else {
+            None
+        };
+        let channel = crate::mtls_client::connect_internal(&addr, SECRET_SERVER_TLS_NAME, mtls.as_ref())
             .await
-            .map_err(|err| {
-                ErrorArrayItem::new(
-                    Errors::Network,
-                    format!("Connecting to secret-server at {SECRET_SERVER_ADDR}: {err}"),
-                )
-            })?;
-        Ok(Self { client })
+            .map_err(&net)?;
+
+        Ok(Self { client: SecretServiceClient::new(channel), service_credential })
     }
 
     /// `Ok(None)` means "confirmed absent, safe to provision"; any other
@@ -74,6 +83,8 @@ impl SecretClient {
         environment_id: &str,
     ) -> Result<Option<Vec<u8>>, ErrorArrayItem> {
         let request = proto::GetSecretRequest {
+            access_token: String::new(),
+            service_credential: self.service_credential.clone(),
             runner_id: NODE_PASSPHRASE_RUNNER_ID.to_owned(),
             environment_id: environment_id.to_owned(),
             secret_key: secret_key.to_owned(),
@@ -95,6 +106,8 @@ impl SecretClient {
         value: &str,
     ) -> Result<(), ErrorArrayItem> {
         let request = proto::CreateSecretRequest {
+            access_token: String::new(),
+            service_credential: self.service_credential.clone(),
             runner_id: NODE_PASSPHRASE_RUNNER_ID.to_owned(),
             environment_id: environment_id.to_owned(),
             secret_key: secret_key.to_owned(),
@@ -157,6 +170,8 @@ impl SecretClient {
         environment_id: &str,
     ) -> Result<String, ErrorArrayItem> {
         let request = proto::GetAllSecretsRequest {
+            access_token: String::new(),
+            service_credential: self.service_credential.clone(),
             runner_id: runner_id.to_owned(),
             environment_id: environment_id.to_owned(),
             version: 0,
@@ -196,6 +211,8 @@ impl SecretClient {
         value: &str,
     ) -> Result<bool, ErrorArrayItem> {
         let request = proto::CreateSecretRequest {
+            access_token: String::new(),
+            service_credential: self.service_credential.clone(),
             runner_id: runner_id.to_owned(),
             environment_id: environment_id.to_owned(),
             secret_key: secret_key.to_owned(),
