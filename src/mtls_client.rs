@@ -154,8 +154,10 @@ pub mod account {
     tonic::include_proto!("accounts");
 }
 
-/// Default address for `ais_auth`. Override with `AIS_AUTH_ADDR`.
-const DEFAULT_AIS_AUTH_ADDR: &str = "https://auth.ah.internal:9801";
+/// Default address for `ais_auth`. Matches its gRPC server's own default
+/// bind port (`GRPC_ADDR`, `ais_auth/src/main.rs`, `0.0.0.0:50051`).
+/// Override with `AIS_AUTH_ADDR`.
+const DEFAULT_AIS_AUTH_ADDR: &str = "https://auth.ah.internal:50051";
 
 /// Name in `ais_auth`'s server certificate's SAN (what `mtls_ca_tool issue`
 /// was given). Override with `AIS_AUTH_TLS_NAME`.
