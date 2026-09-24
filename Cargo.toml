@@ -5,7 +5,7 @@ version = "2.5.2"
 edition = "2024"
 
 [dependencies]
-artisan_middleware = "7.0.0"
+artisan_middleware = "7.1.0"
 tokio = { version = "1.53.0", features = ["rt-multi-thread", "macros", "signal", "sync", "process", "time", "net"] }
 chrono = { version = "0.4.45", features = ["clock"] }
 tonic = { version = "0.14.6", features = ["transport", "tls-ring"] }
