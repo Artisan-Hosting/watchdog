@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=proto/watchdog.proto");
     println!("cargo:rerun-if-changed=proto/secret.proto");
     tonic_prost_build::configure()
-        .compile_protos(&["proto/watchdog.proto", "proto/secret.proto"], &["proto"])?;
+        .compile_protos(&["proto/watchdog.proto", "../ais_proto/secret.proto"], &["proto", "../ais_proto"])?;
     configure_version_env_vars()?;
     build_ebpf()?;
     Ok(())

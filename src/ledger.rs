@@ -14,6 +14,7 @@ use artisan_middleware::{
         },
         log,
     },
+    identity::strip_ais_prefix,
     timestamp::current_timestamp,
 };
 use once_cell::sync::Lazy;
@@ -83,6 +84,7 @@ pub struct HistoricalLogsPage {
 
 const DEFAULT_HISTORICAL_QUERY_LIMIT: u32 = 500;
 const MAX_HISTORICAL_QUERY_LIMIT: u32 = 5_000;
+const LEDGER_SCHEMA_VERSION: &str = "1";
 
 static CONNECTION: Lazy<Mutex<Option<Connection>>> = Lazy::new(|| Mutex::new(None));
 
@@ -117,6 +119,49 @@ pub async fn record_batch(entries: Vec<(String, Metrics)>) {
             err.err_mesg
         );
     }
+}
+
+fn perform_ledger_migration(conn: &Connection) -> Result<(), ErrorArrayItem> {
+    log!(
+        LogLevel::Info,
+        "Starting ledger migration to add project_id column"
+    );
+
+    // Migrate samples table
+    conn.execute(
+        "UPDATE samples SET project_id = strip_ais_prefix(app_name) WHERE project_id IS NULL",
+        params![],
+    ).map_err(|err| {
+        ErrorArrayItem::new(
+            Errors::GeneralError,
+            format!("Failed to migrate samples table: {err}"),
+        )
+    })?;
+
+    // Migrate std_log_entries table  
+    conn.execute(
+        "UPDATE std_log_entries SET project_id = strip_ais_prefix(app_name) WHERE project_id IS NULL",
+        params![],
+    ).map_err(|err| {
+        ErrorArrayItem::new(
+            Errors::GeneralError,
+            format!("Failed to migrate std_log_entries table: {err}"),
+        )
+    })?;
+
+    // Migrate std_log_cursors table
+    conn.execute(
+        "UPDATE std_log_cursors SET project_id = strip_ais_prefix(app_name) WHERE project_id IS NULL",
+        params![],
+    ).map_err(|err| {
+        ErrorArrayItem::new(
+            Errors::GeneralError,
+            format!("Failed to migrate std_log_cursors table: {err}"),
+        )
+    })?;
+
+    log!(LogLevel::Info, "Ledger migration completed");
+    Ok(())
 }
 
 /// Returns the latest metrics sample for an application, if available.
@@ -201,10 +246,40 @@ fn open_connection() -> Result<Connection, ErrorArrayItem> {
         })?;
     }
 
-    Connection::open(LEDGER_PATH).map_err(|err| {
+    let conn = Connection::open(LEDGER_PATH).map_err(|err| {
         ErrorArrayItem::new(
             Errors::InputOutput,
             format!("Failed to open ledger database {}: {err}", LEDGER_PATH),
+        )
+    })?;
+
+    register_sql_functions(&conn)?;
+
+    Ok(conn)
+}
+
+/// Registers custom scalar functions used by the schema/migration SQL.
+/// Factored out of `open_connection` so tests can register the same
+/// functions on an in-memory connection.
+fn register_sql_functions(conn: &Connection) -> Result<(), ErrorArrayItem> {
+    // strip_ais_prefix falls back to the original name (never to an empty
+    // string) when there's no "ais_" prefix to strip -- an app_name
+    // without the prefix still needs a distinct project_id, or every such
+    // app would collapse into the same empty-string value and become
+    // indistinguishable in the ledger.
+    conn.create_scalar_function(
+        "strip_ais_prefix",
+        1,
+        rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC,
+        |ctx| {
+            let input = ctx.get::<String>(0)?;
+            let stripped = strip_ais_prefix(&input).map(|s| s.to_string());
+            Ok(stripped.unwrap_or(input))
+        },
+    ).map_err(|err| {
+        ErrorArrayItem::new(
+            Errors::GeneralError,
+            format!("Failed to register strip_ais_prefix function: {err}"),
         )
     })
 }
@@ -220,7 +295,16 @@ fn initialise_schema(conn: &Connection) -> Result<(), ErrorArrayItem> {
         "WAL"
     };
 
-    let schema = format!(
+    // Base tables + the version table itself, WITHOUT project_id -- this
+    // must run, and __ledger_schema_version must exist, before anything
+    // queries it below. `CREATE TABLE IF NOT EXISTS` only creates tables
+    // that are missing entirely; it is a no-op against a table that
+    // already exists from before this migration, so it does NOT add
+    // project_id to an existing samples/std_log_entries/std_log_cursors
+    // table on an already-deployed node -- that's handled explicitly via
+    // ALTER TABLE below, uniformly for both a brand-new db and an
+    // upgrading one.
+    let base_schema = format!(
         r#"
         PRAGMA journal_mode={journal_mode};
         CREATE TABLE IF NOT EXISTS samples (
@@ -251,15 +335,109 @@ fn initialise_schema(conn: &Connection) -> Result<(), ErrorArrayItem> {
             updated_at INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (app_name, stream)
         );
+        CREATE TABLE IF NOT EXISTS __ledger_schema_version (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
     "#
     );
 
-    conn.execute_batch(&schema).map_err(|err| {
+    conn.execute_batch(&base_schema).map_err(|err| {
         ErrorArrayItem::new(
             Errors::GeneralError,
             format!("Failed to initialise usage ledger schema: {err}"),
         )
-    })
+    })?;
+
+    // Only safe to query now that __ledger_schema_version is guaranteed to
+    // exist -- querying it any earlier fails with "no such table" on every
+    // fresh or not-yet-migrated database (rusqlite's `.optional()` only
+    // catches QueryReturnedNoRows, not a missing table).
+    let current_version: Option<String> = conn
+        .query_row(
+            "SELECT value FROM __ledger_schema_version WHERE key = 'version'",
+            params![],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|err| {
+            ErrorArrayItem::new(
+                Errors::GeneralError,
+                format!("Failed to query schema version: {err}"),
+            )
+        })?;
+
+    let needs_migration = current_version.as_deref() != Some(LEDGER_SCHEMA_VERSION);
+
+    if needs_migration {
+        add_column_if_missing(conn, "samples", "project_id", "TEXT")?;
+        add_column_if_missing(conn, "std_log_entries", "project_id", "TEXT")?;
+        add_column_if_missing(conn, "std_log_cursors", "project_id", "TEXT")?;
+
+        // The project_id indexes can only be created once the column
+        // itself is guaranteed present on every node, hence after the
+        // ALTER TABLE calls above rather than alongside base_schema.
+        conn.execute_batch(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_samples_project_ts
+                ON samples (project_id, ts) WHERE project_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_std_log_entries_project_stream_ts_id
+                ON std_log_entries (project_id, stream, ts, id) WHERE project_id IS NOT NULL;
+            "#,
+        )
+        .map_err(|err| {
+            ErrorArrayItem::new(
+                Errors::GeneralError,
+                format!("Failed to create project_id indexes: {err}"),
+            )
+        })?;
+
+        perform_ledger_migration(conn)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO __ledger_schema_version (key, value) VALUES ('version', ?1)",
+            params![LEDGER_SCHEMA_VERSION],
+        ).map_err(|err| {
+            ErrorArrayItem::new(
+                Errors::GeneralError,
+                format!("Failed to update schema version: {err}"),
+            )
+        })?;
+        log!(
+            LogLevel::Info,
+            "Ledger schema migrated to version {}",
+            LEDGER_SCHEMA_VERSION
+        );
+    }
+
+    Ok(())
+}
+
+/// Adds `column` to `table` if it isn't already there. `ALTER TABLE ADD
+/// COLUMN` has no `IF NOT EXISTS` form portable across the SQLite versions
+/// this might run against, so a "duplicate column name" failure is treated
+/// as success (the column is already exactly what we want) rather than
+/// propagated as an error -- every other failure still is.
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    sql_type: &str,
+) -> Result<(), ErrorArrayItem> {
+    match conn.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {sql_type}"),
+        params![],
+    ) {
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
+            if msg.contains("duplicate column name") =>
+        {
+            Ok(())
+        }
+        Err(err) => Err(ErrorArrayItem::new(
+            Errors::GeneralError,
+            format!("Failed to add column {column} to {table}: {err}"),
+        )),
+    }
 }
 
 fn insert_samples(
@@ -276,7 +454,7 @@ fn insert_samples(
     {
         let mut stmt = tx
             .prepare(
-                "INSERT INTO samples (app_name, ts, cpu, mem, rx, tx) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO samples (app_name, project_id, ts, cpu, mem, rx, tx) VALUES (?1, strip_ais_prefix(?1), ?2, ?3, ?4, ?5, ?6)",
             )
             .map_err(|err| {
                 ErrorArrayItem::new(
@@ -452,7 +630,7 @@ fn insert_stream_entries(
     {
         let mut stmt = tx
             .prepare(
-                "INSERT INTO std_log_entries (app_name, stream, ts, line) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO std_log_entries (app_name, project_id, stream, ts, line) VALUES (?1, strip_ais_prefix(?1), ?2, ?3, ?4)",
             )
             .map_err(|err| {
                 ErrorArrayItem::new(
@@ -541,24 +719,24 @@ fn upsert_cursor(
     last_ts: u64,
     last_count: u64,
 ) -> Result<(), ErrorArrayItem> {
-    tx.execute(
-        r#"
-        INSERT INTO std_log_cursors (app_name, stream, last_ts, last_count, updated_at)
-        VALUES (?1, ?2, ?3, ?4, ?5)
-        ON CONFLICT(app_name, stream)
-        DO UPDATE SET
-            last_ts = excluded.last_ts,
-            last_count = excluded.last_count,
-            updated_at = excluded.updated_at
-        "#,
-        params![
-            application,
-            stream.as_i64(),
-            last_ts as i64,
-            last_count as i64,
-            current_timestamp() as i64
-        ],
-    )
+     tx.execute(
+         r#"
+         INSERT INTO std_log_cursors (app_name, project_id, stream, last_ts, last_count, updated_at)
+         VALUES (?1, strip_ais_prefix(?1), ?2, ?3, ?4, ?5)
+         ON CONFLICT(app_name, stream)
+         DO UPDATE SET
+             last_ts = excluded.last_ts,
+             last_count = excluded.last_count,
+             updated_at = excluded.updated_at
+         "#,
+         params![
+             application,
+             stream.as_i64(),
+             last_ts as i64,
+             last_count as i64,
+             current_timestamp() as i64
+         ],
+     )
     .map_err(|err| {
         ErrorArrayItem::new(
             Errors::InputOutput,
@@ -691,4 +869,129 @@ fn map_historical_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoricalLog
         timestamp: row.get::<_, i64>(3)? as u64,
         line: row.get(4)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_connection() -> Connection {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        register_sql_functions(&conn).expect("register sql functions");
+        conn
+    }
+
+    /// The bug this guards against: `initialise_schema` used to query
+    /// `__ledger_schema_version` before that table was guaranteed to
+    /// exist, which fails with "no such table" (not the
+    /// `QueryReturnedNoRows` that `.optional()` catches) on every
+    /// completely fresh database -- i.e. watchdog would fail to start
+    /// anywhere this code ran for the first time.
+    #[test]
+    fn fresh_database_initialises_without_error() {
+        let conn = test_connection();
+        initialise_schema(&conn).expect("schema init must succeed on a fresh db");
+
+        let project_id_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('samples') WHERE name = 'project_id'",
+                params![],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .unwrap();
+        assert!(project_id_exists, "project_id column must exist after init");
+    }
+
+    /// The other bug this guards against: `CREATE TABLE IF NOT EXISTS`
+    /// never adds columns to a table that already exists, so a node
+    /// upgrading from before this migration (i.e. every already-deployed
+    /// node) would hit "no such column: project_id" on the backfill
+    /// UPDATE unless the new column is added via ALTER TABLE first.
+    #[test]
+    fn pre_existing_database_without_project_id_gets_migrated() {
+        let conn = test_connection();
+
+        // Simulate a node's ledger.db from before this migration: the
+        // original schema, no project_id column anywhere, with real rows
+        // already in it.
+        conn.execute_batch(
+            r#"
+            CREATE TABLE samples (
+                app_name TEXT NOT NULL,
+                ts INTEGER NOT NULL,
+                cpu REAL NOT NULL,
+                mem REAL NOT NULL,
+                rx INTEGER,
+                tx INTEGER
+            );
+            CREATE TABLE std_log_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                app_name TEXT NOT NULL,
+                stream INTEGER NOT NULL,
+                ts INTEGER NOT NULL,
+                line TEXT NOT NULL
+            );
+            CREATE TABLE std_log_cursors (
+                app_name TEXT NOT NULL,
+                stream INTEGER NOT NULL,
+                last_ts INTEGER NOT NULL DEFAULT 0,
+                last_count INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (app_name, stream)
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO samples (app_name, ts, cpu, mem, rx, tx) VALUES ('ais_63c35f4b', 1000, 1.0, 2.0, 10, 20)",
+            params![],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO samples (app_name, ts, cpu, mem, rx, tx) VALUES ('generic_runner', 1000, 1.0, 2.0, 10, 20)",
+            params![],
+        )
+        .unwrap();
+
+        initialise_schema(&conn).expect("schema init must migrate an existing db without error");
+
+        let prefixed: String = conn
+            .query_row(
+                "SELECT project_id FROM samples WHERE app_name = 'ais_63c35f4b'",
+                params![],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(prefixed, "63c35f4b");
+
+        // An app_name with no "ais_" prefix must keep its own name as
+        // project_id, not collapse to an empty string.
+        let unprefixed: String = conn
+            .query_row(
+                "SELECT project_id FROM samples WHERE app_name = 'generic_runner'",
+                params![],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unprefixed, "generic_runner");
+    }
+
+    /// Running init twice (as happens on every watchdog restart) must not
+    /// error and must not re-run the migration a second time.
+    #[test]
+    fn initialise_schema_is_idempotent() {
+        let conn = test_connection();
+        initialise_schema(&conn).unwrap();
+        initialise_schema(&conn).unwrap();
+
+        let version: String = conn
+            .query_row(
+                "SELECT value FROM __ledger_schema_version WHERE key = 'version'",
+                params![],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, LEDGER_SCHEMA_VERSION);
+    }
 }
