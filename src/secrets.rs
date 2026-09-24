@@ -58,7 +58,19 @@ impl SecretClient {
         let net = |detail: String| ErrorArrayItem::new(Errors::Network, detail);
 
         let addr = std::env::var("AIS_SECRETSERVER_ADDR").unwrap_or_else(|_| SECRET_SERVER_ADDR.to_owned());
-        let service_credential = crate::mtls_client::load_service_credential().map_err(&net)?;
+        // Prefer a self-minted, short-lived session token (no raw secret on
+        // disk); fall back to the manually-provisioned long-lived one if
+        // ais_auth is unreachable or hasn't implemented RequestServiceSession
+        // yet, so upgrading this binary alone never breaks an already-working
+        // node. See `mtls_client::obtain_service_session`.
+        let service_credential = match crate::mtls_client::obtain_service_session("watchdog").await {
+            Ok(token) => token,
+            Err(mint_err) => crate::mtls_client::load_service_credential().map_err(|env_err| {
+                net(format!(
+                    "no service session ({mint_err}); no env fallback either ({env_err})"
+                ))
+            })?,
+        };
         let mtls = if crate::mtls_client::wants_tls(&addr) {
             Some(crate::mtls_client::ClientMtls::load("watchdog").map_err(&net)?)
         } else {

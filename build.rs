@@ -10,8 +10,15 @@ use std::{
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=proto/watchdog.proto");
     println!("cargo:rerun-if-changed=proto/secret.proto");
+    println!("cargo:rerun-if-changed=../ais_proto/accounts.proto");
     tonic_prost_build::configure()
         .compile_protos(&["proto/watchdog.proto", "../ais_proto/secret.proto"], &["proto", "../ais_proto"])?;
+    // Separate call, client-only: watchdog only ever dials AccountInternal
+    // (to mint its own mTLS session token), it never serves it -- a full
+    // server impl here would be dead code.
+    tonic_prost_build::configure()
+        .build_server(false)
+        .compile_protos(&["../ais_proto/accounts.proto"], &["../ais_proto"])?;
     configure_version_env_vars()?;
     build_ebpf()?;
     Ok(())

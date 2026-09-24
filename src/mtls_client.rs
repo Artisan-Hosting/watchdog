@@ -123,6 +123,12 @@ pub async fn connect_internal(
 /// a `0600` file keeps it out of `/proc/<pid>/environ` and `ps e`), otherwise
 /// from `AIS_SERVICE_CREDENTIAL`. Surrounding whitespace is trimmed. It is a
 /// secret: callers must not log it, and this crate never does.
+///
+/// This is the *fallback* path -- prefer [`obtain_service_session`] for a
+/// GLOBAL-org platform-infra service (Manager, watchdog, gitmon), which needs
+/// no manually-provisioned raw secret at all. This function still matters for
+/// org-scoped services and local dev, and as what `obtain_service_session`
+/// itself falls back to on any error.
 pub fn load_service_credential() -> Result<String, String> {
     let raw = match std::env::var("AIS_SERVICE_CREDENTIAL_FILE") {
         Ok(path) => std::fs::read_to_string(&path)
@@ -137,4 +143,70 @@ pub fn load_service_credential() -> Result<String, String> {
         return Err("the configured service credential is empty".to_owned());
     }
     Ok(credential)
+}
+
+/// RBAC Phase 5: `AccountInternal`'s `RequestServiceSession`/
+/// `ResolveServiceIdentity`, generated from the same `ais_proto/accounts.proto`
+/// ais_auth itself implements. Declared here (not in each crate's own
+/// `secrets.rs`-style proto module) so `obtain_service_session` below is
+/// fully self-contained.
+pub mod account {
+    tonic::include_proto!("accounts");
+}
+
+/// Default address for `ais_auth`. Override with `AIS_AUTH_ADDR`.
+const DEFAULT_AIS_AUTH_ADDR: &str = "https://auth.ah.internal:9801";
+
+/// Name in `ais_auth`'s server certificate's SAN (what `mtls_ca_tool issue`
+/// was given). Override with `AIS_AUTH_TLS_NAME`.
+const DEFAULT_AIS_AUTH_TLS_NAME: &str = "ais_auth";
+
+/// In-process cache for [`obtain_service_session`]: the minted token, when it
+/// was minted, and its granted TTL. Re-minted transparently once ~80% of
+/// that TTL has elapsed, so a caller never has to think about expiry -- the
+/// same "mint once, reuse until near-expiry" shape as `ais_auth`'s own
+/// JWT-signing-key cache, just without needing a cold-path lock since this
+/// runs on a single connect path per process, not concurrent request
+/// handlers.
+static SESSION_CACHE: once_cell::sync::Lazy<tokio::sync::Mutex<Option<(String, std::time::Instant, u64)>>> =
+    once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(None));
+
+/// Mints (or reuses a cached, still-fresh) short-lived service session token
+/// for `own_service` by calling ais_auth's `RequestServiceSession` over the
+/// same mTLS channel [`ClientMtls::load`] already sets up -- the client
+/// certificate on that channel *is* the credential; nothing else is sent.
+///
+/// GLOBAL-org platform-infra services only (v1) -- see
+/// `ais_proto/accounts.proto`'s `RequestServiceSession` doc comment. Org-scoped
+/// services should use [`load_service_credential`] instead.
+pub async fn obtain_service_session(own_service: &str) -> Result<String, String> {
+    {
+        let cache = SESSION_CACHE.lock().await;
+        if let Some((token, minted_at, ttl_secs)) = cache.as_ref() {
+            let refresh_at = *minted_at + std::time::Duration::from_secs(ttl_secs * 4 / 5);
+            if std::time::Instant::now() < refresh_at {
+                return Ok(token.clone());
+            }
+        }
+    }
+
+    let addr = std::env::var("AIS_AUTH_ADDR").unwrap_or_else(|_| DEFAULT_AIS_AUTH_ADDR.to_owned());
+    let server_name = std::env::var("AIS_AUTH_TLS_NAME").unwrap_or_else(|_| DEFAULT_AIS_AUTH_TLS_NAME.to_owned());
+    let mtls = ClientMtls::load(own_service)?;
+    let channel = connect_internal(&addr, &server_name, Some(&mtls)).await?;
+    let mut client = account::account_internal_client::AccountInternalClient::new(channel);
+
+    let response = client
+        .request_service_session(account::RequestServiceSessionRequest { requested_ttl_secs: 0 })
+        .await
+        .map_err(|e| format!("RequestServiceSession failed: {e}"))?
+        .into_inner();
+
+    let mut cache = SESSION_CACHE.lock().await;
+    *cache = Some((
+        response.session_token.clone(),
+        std::time::Instant::now(),
+        response.expires_in.max(1) as u64,
+    ));
+    Ok(response.session_token)
 }
