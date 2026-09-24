@@ -1,7 +1,8 @@
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
-#include "macros.h" 
+#include <bpf/bpf_tracing.h>
+#include "macros.h"
 
 struct traffic_stats {
     __u64 rx_bytes;
@@ -15,26 +16,14 @@ struct {
     __type(value, struct traffic_stats);
 } pid_traffic_map SEC(".maps");
 
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 1024);
-    __type(key, __u64); // Cgroup ID
-    __type(value, struct traffic_stats);
-} cgroup_traffic_map SEC(".maps");
-
 // Common function to update stats
 static __always_inline void update_stats(__u32 pid, ssize_t bytes, bool is_tx) {
     if (bytes <= 0)
         return;
 
-    struct traffic_stats zero = {};
     struct traffic_stats *stats = bpf_map_lookup_elem(&pid_traffic_map, &pid);
-    if (!stats) {
-        bpf_map_update_elem(&pid_traffic_map, &pid, &zero, BPF_ANY);
-        stats = bpf_map_lookup_elem(&pid_traffic_map, &pid);
-        if (!stats)
-            return;
-    }
+    if (!stats)
+        return;
 
     if (is_tx) {
         __sync_fetch_and_add(&stats->tx_bytes, bytes);

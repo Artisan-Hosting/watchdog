@@ -14,7 +14,9 @@ import (
 	pb "ais/generated/artisan/watchdog"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -50,7 +52,7 @@ func main() {
 		}),
 	)
 	if err != nil {
-		log.Fatalf("failed to connect to socket: %v", err)
+		fatalRPC("failed to connect to socket", err)
 	}
 	defer conn.Close()
 
@@ -59,6 +61,8 @@ func main() {
 	defer cancel()
 
 	switch command {
+	case "recalculate":
+		recalculateAllowedClients(ctx, client)
 	case "list":
 		listApplications(ctx, client)
 	case "info":
@@ -75,6 +79,34 @@ func main() {
 	case "set":
 		requireArgs(args, 3, "set <application> <field> <value>")
 		executeSetCommand(ctx, client, args[0], args[1], args[2])
+	case "usage":
+		requireArgs(args, 1, "usage <application> [start] [end]")
+		start, end := parseWindowArgs(args[1:])
+		queryUsage(ctx, client, args[0], start, end)
+	case "logs-current":
+		requireArgs(args, 1, "logs-current <application> [limit]")
+		limit, err := parseOptionalUint32(args, 1)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid limit: %v\n", err)
+			os.Exit(1)
+		}
+		getCurrentLogs(ctx, client, args[0], limit)
+	case "logs-history":
+		requireArgs(args, 1, "logs-history <application> [stream] [start] [end] [limit] [cursor]")
+		stream, start, end, limit, cursor, err := parseHistoricalArgs(args[1:])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid logs-history args: %v\n", err)
+			os.Exit(1)
+		}
+		queryHistoricalLogs(ctx, client, args[0], stream, start, end, limit, cursor)
+	case "setup":
+		if err := runSetup(client, args); err != nil {
+			fatalRPC("setup", err)
+		}
+	case "edit":
+		if err := runEdit(client, args); err != nil {
+			fatalRPC("edit", err)
+		}
 	default:
 		fmt.Printf("Unknown command: %s\n\n", command)
 		printUsage()
@@ -83,7 +115,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`Usage: watchdog-cli [command] [args]
+	fmt.Print(`Usage: ais [command] [args]
 
 Commands:
   list
@@ -95,17 +127,39 @@ Commands:
   rebuild <application>
   get <application> <field>
   set <application> <field> <value>
+  usage <application> [start] [end]
+  logs-current <application> [limit]
+  logs-history <application> [stream] [start] [end] [limit] [cursor]
+  setup [application]
+  edit <application> [config|overrides]
+  recalculate
 
 Examples:
-  watchdog-cli get myapp log_level
-  watchdog-cli set myapp memory_cap 256
-  watchdog-cli start myapp
+  ais get myapp log_level
+  ais set myapp memory_cap 256
+  ais start myapp
+  ais logs-current ais_manager 200
+  ais logs-history ais_manager both 0 0 300 0
+  sudo ais setup
+  sudo ais setup 1a2b3c4d
+  sudo ais edit ais_1a2b3c4d config
 `)
+}
+
+func fatalRPC(operation string, err error) {
+	fmt.Fprintf(os.Stderr, "%s: %v\n", operation, err)
+	lower := strings.ToLower(err.Error())
+	if os.Geteuid() != 0 && (status.Code(err) == codes.PermissionDenied ||
+		status.Code(err) == codes.Unavailable ||
+		strings.Contains(lower, "permission denied")) {
+		fmt.Fprintln(os.Stderr, "the watchdog socket is root-only; re-run with sudo")
+	}
+	os.Exit(1)
 }
 
 func requireArgs(args []string, n int, usage string) {
 	if len(args) < n {
-		fmt.Printf("Usage: watchdog-cli %s\n", usage)
+		fmt.Printf("Usage: ais %s\n", usage)
 		os.Exit(1)
 	}
 }
@@ -113,7 +167,7 @@ func requireArgs(args []string, n int, usage string) {
 func listApplications(ctx context.Context, client pb.WatchdogClient) {
 	resp, err := client.ListApplications(ctx, &pb.Empty{})
 	if err != nil {
-		log.Fatalf("ListApplications: %v", err)
+		fatalRPC("ListApplications", err)
 	}
 	if len(resp.Applications) == 0 {
 		fmt.Println("No applications found.")
@@ -134,7 +188,7 @@ func listApplications(ctx context.Context, client pb.WatchdogClient) {
 	if len(systemApps) > 0 {
 		fmt.Println("System Applications:")
 		for _, app := range systemApps {
-			fmt.Printf("  %-20s %-10s CPU: %.1f%% Mem: %.1f MB\n",
+			fmt.Printf("  %-20s %-10s CPU: %.2f%% Mem: %.1f MB\n",
 				app.Name, app.Status, app.CpuUsage, app.MemoryUsage)
 		}
 	}
@@ -145,7 +199,7 @@ func listApplications(ctx context.Context, client pb.WatchdogClient) {
 		}
 		fmt.Println("Client Applications:")
 		for _, app := range clientApps {
-			fmt.Printf("  %-20s %-10s CPU: %.1f%% Mem: %.1f MB\n",
+			fmt.Printf("  %-20s %-10s CPU: %.2f%% Mem: %.1f MB\n",
 				app.Name, app.Status, app.CpuUsage, app.MemoryUsage)
 		}
 	}
@@ -159,23 +213,49 @@ func isSystemApplication(name string) bool {
 func getSystemInfo(ctx context.Context, client pb.WatchdogClient) {
 	info, err := client.GetSystemInfo(ctx, &pb.Empty{})
 	if err != nil {
-		log.Fatalf("GetSystemInfo: %v", err)
+		fatalRPC("GetSystemInfo", err)
 	}
-	fmt.Printf("Identity: %s\nManager Linked: %v\nSystem Apps Initialized: %v\nIPs: %s\n",
-		info.Identity, info.ManagerLinked, info.SystemAppsInitialized, strings.Join(info.IpAddresses, ", "))
+	versions, err := client.GetVersionInfo(ctx, &pb.Empty{})
+	if err != nil {
+		fatalRPC("GetVersionInfo", err)
+	}
+	fmt.Printf(
+		"Identity: %s\nManager Linked: %v\nSystem Apps Initialized: %v\nSecurity Tripped: %v\nSecurity Trip Detected At: %d\nSecurity Trip Summary: %s\nWatchdog Version: %s\nArtisan Middleware Version: %s\nIPs: %s\n",
+		info.Identity,
+		info.ManagerLinked,
+		info.SystemAppsInitialized,
+		info.SecurityTripped,
+		info.SecurityTripDetectedAt,
+		info.SecurityTripSummary,
+		versions.WatchdogVersion,
+		versions.ArtisanMiddlewareVersion,
+		strings.Join(info.IpAddresses, ", "),
+	)
 }
 
 func getApplicationStatus(ctx context.Context, client pb.WatchdogClient, name string) {
 	resp, err := client.GetApplication(ctx, &pb.ApplicationStatusRequest{Name: name})
 	if err != nil {
-		log.Fatalf("GetApplication: %v", err)
+		fatalRPC("GetApplication", err)
 	}
 	if !resp.Found {
 		fmt.Printf("Application '%s' not found.\n", name)
 		return
 	}
 	app := resp.Status
-	fmt.Printf("App: %s\nStatus: %s\nCPU: %.2f%%\nMem: %.2f MB\n", app.Name, app.Status, app.CpuUsage, app.MemoryUsage)
+	if app.NetworkUsage != nil {
+		fmt.Printf(
+			"App: %s\nStatus: %s\nCPU: %.2f%%\nMem: %.2f MB\nNet RX: %d B\nNet TX: %d B\n",
+			app.Name,
+			app.Status,
+			app.CpuUsage,
+			app.MemoryUsage,
+			app.NetworkUsage.RxBytes,
+			app.NetworkUsage.TxBytes,
+		)
+		return
+	}
+	fmt.Printf("App: %s\nStatus: %s\nCPU: %.2f%%\nMem: %.2f MB\nNet: unavailable\n", app.Name, app.Status, app.CpuUsage, app.MemoryUsage)
 }
 
 func executeSimpleCommand(ctx context.Context, client pb.WatchdogClient, cmd string, app string) {
@@ -195,7 +275,7 @@ func executeSimpleCommand(ctx context.Context, client pb.WatchdogClient, cmd str
 
 	resp, err := client.ExecuteCommand(ctx, req)
 	if err != nil {
-		log.Fatalf("ExecuteCommand: %v", err)
+		fatalRPC("ExecuteCommand", err)
 	}
 	fmt.Printf("[%s] accepted=%v message=%s\n", strings.ToUpper(cmd), resp.Accepted, resp.Message)
 }
@@ -217,7 +297,7 @@ func executeGetCommand(ctx context.Context, client pb.WatchdogClient, app string
 
 	resp, err := client.ExecuteCommand(ctx, req)
 	if err != nil {
-		log.Fatalf("ExecuteCommand (get): %v", err)
+		fatalRPC("ExecuteCommand (get)", err)
 	}
 	fmt.Printf("[GET] accepted=%v message=%s\n", resp.Accepted, resp.Message)
 }
@@ -240,9 +320,253 @@ func executeSetCommand(ctx context.Context, client pb.WatchdogClient, app, field
 
 	resp, err := client.ExecuteCommand(ctx, req)
 	if err != nil {
-		log.Fatalf("ExecuteCommand (set): %v", err)
+		fatalRPC("ExecuteCommand (set)", err)
 	}
 	fmt.Printf("[SET] accepted=%v message=%s\n", resp.Accepted, resp.Message)
+}
+
+func queryUsage(ctx context.Context, client pb.WatchdogClient, app string, start, end uint64) {
+	req := &pb.UsageQueryRequest{
+		Application: app,
+		Start:       start,
+		End:         end,
+	}
+	resp, err := client.QueryUsage(ctx, req)
+	if err != nil {
+		fatalRPC("QueryUsage", err)
+	}
+	if !resp.Found {
+		fmt.Printf("No usage data for %s in the requested window.\n", app)
+		return
+	}
+	rxHuman := humanBytes(resp.TotalRx)
+	txHuman := humanBytes(resp.TotalTx)
+	fmt.Printf(
+		"Usage for %s (%d samples)\n  Window: %s -> %s\n  Avg CPU: %.2f%%\n  Avg Mem: %.2f MB\n  Peak Mem: %.2f MB\n  Net RX: %s\n  Net TX: %s\n",
+		resp.Application,
+		resp.SampleCount,
+		formatTimestamp(resp.Start),
+		formatTimestamp(resp.End),
+		resp.AvgCpu,
+		resp.AvgMem,
+		resp.PeakMem,
+		rxHuman,
+		txHuman,
+	)
+}
+
+func getCurrentLogs(ctx context.Context, client pb.WatchdogClient, app string, limit uint32) {
+	req := &pb.CurrentLogsRequest{
+		Application: app,
+		Limit:       limit,
+	}
+	resp, err := client.GetCurrentLogs(ctx, req)
+	if err != nil {
+		fatalRPC("GetCurrentLogs", err)
+	}
+	if !resp.Found {
+		fmt.Printf("Application '%s' not found.\n", app)
+		return
+	}
+
+	fmt.Printf("Current logs for %s (last_updated=%s)\n", resp.Application, formatTimestamp(resp.LastUpdated))
+	if len(resp.Stdout) == 0 && len(resp.Stderr) == 0 {
+		fmt.Println("No current log entries.")
+		return
+	}
+
+	if len(resp.Stdout) > 0 {
+		fmt.Println("STDOUT:")
+		for _, entry := range resp.Stdout {
+			fmt.Printf("  [%s] %s\n", formatTimestamp(entry.Timestamp), entry.Line)
+		}
+	}
+	if len(resp.Stderr) > 0 {
+		fmt.Println("STDERR:")
+		for _, entry := range resp.Stderr {
+			fmt.Printf("  [%s] %s\n", formatTimestamp(entry.Timestamp), entry.Line)
+		}
+	}
+}
+
+func queryHistoricalLogs(
+	ctx context.Context,
+	client pb.WatchdogClient,
+	app string,
+	stream pb.LogStream,
+	start, end uint64,
+	limit uint32,
+	cursor uint64,
+) {
+	req := &pb.HistoricalLogsRequest{
+		Application: app,
+		Start:       start,
+		End:         end,
+		Stream:      stream,
+		Limit:       limit,
+		Cursor:      cursor,
+	}
+	resp, err := client.QueryHistoricalLogs(ctx, req)
+	if err != nil {
+		fatalRPC("QueryHistoricalLogs", err)
+	}
+
+	if !resp.Found {
+		fmt.Printf("No historical logs for %s in requested window.\n", app)
+		return
+	}
+
+	fmt.Printf(
+		"Historical logs for %s\n  Window: %s -> %s\n  Stream: %s\n  Entries: %d\n  Next Cursor: %d\n  Has More: %v\n",
+		resp.Application,
+		formatTimestamp(resp.Start),
+		formatTimestamp(resp.End),
+		resp.Stream.String(),
+		len(resp.Entries),
+		resp.NextCursor,
+		resp.HasMore,
+	)
+
+	for _, entry := range resp.Entries {
+		fmt.Printf(
+			"  [%d][%s][%s] %s\n",
+			entry.Id,
+			formatTimestamp(entry.Timestamp),
+			entry.Stream.String(),
+			entry.Line,
+		)
+	}
+}
+
+func formatTimestamp(ts uint64) string {
+	if ts == 0 {
+		return "(unset)"
+	}
+	return time.Unix(int64(ts), 0).UTC().Format(time.RFC3339)
+}
+
+func parseWindowArgs(args []string) (uint64, uint64) {
+	var start, end uint64
+	var err error
+	if len(args) >= 1 {
+		start, err = parseUintArg(args[0])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid start timestamp: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	if len(args) >= 2 {
+		end, err = parseUintArg(args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "invalid end timestamp: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	return start, end
+}
+
+func parseOptionalUint32(args []string, index int) (uint32, error) {
+	if len(args) <= index {
+		return 0, nil
+	}
+	value, err := strconv.ParseUint(args[index], 10, 32)
+	if err != nil {
+		return 0, err
+	}
+	return uint32(value), nil
+}
+
+func parseHistoricalArgs(args []string) (pb.LogStream, uint64, uint64, uint32, uint64, error) {
+	stream := pb.LogStream_LOG_STREAM_BOTH
+	start := uint64(0)
+	end := uint64(0)
+	limit := uint32(0)
+	cursor := uint64(0)
+
+	index := 0
+	if len(args) > 0 {
+		if parsedStream, ok := parseLogStream(args[0]); ok {
+			stream = parsedStream
+			index = 1
+		}
+	}
+
+	remaining := args[index:]
+	if len(remaining) > 4 {
+		return stream, start, end, limit, cursor, fmt.Errorf("too many arguments")
+	}
+
+	var err error
+	if len(remaining) >= 1 {
+		start, err = parseUintArg(remaining[0])
+		if err != nil {
+			return stream, start, end, limit, cursor, err
+		}
+	}
+	if len(remaining) >= 2 {
+		end, err = parseUintArg(remaining[1])
+		if err != nil {
+			return stream, start, end, limit, cursor, err
+		}
+	}
+	if len(remaining) >= 3 {
+		parsedLimit, limitErr := strconv.ParseUint(remaining[2], 10, 32)
+		if limitErr != nil {
+			return stream, start, end, limit, cursor, limitErr
+		}
+		limit = uint32(parsedLimit)
+	}
+	if len(remaining) >= 4 {
+		cursor, err = parseUintArg(remaining[3])
+		if err != nil {
+			return stream, start, end, limit, cursor, err
+		}
+	}
+
+	return stream, start, end, limit, cursor, nil
+}
+
+func parseLogStream(raw string) (pb.LogStream, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "stdout", "out":
+		return pb.LogStream_LOG_STREAM_STDOUT, true
+	case "stderr", "err":
+		return pb.LogStream_LOG_STREAM_STDERR, true
+	case "both", "all":
+		return pb.LogStream_LOG_STREAM_BOTH, true
+	default:
+		return pb.LogStream_LOG_STREAM_UNSPECIFIED, false
+	}
+}
+
+func parseUintArg(raw string) (uint64, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return value, nil
+}
+
+func humanBytes(value uint64) string {
+	const (
+		KB = 1024.0
+		MB = KB * 1024
+		GB = MB * 1024
+	)
+	val := float64(value)
+	switch {
+	case val >= GB:
+		return fmt.Sprintf("%.2f GB", val/GB)
+	case val >= MB:
+		return fmt.Sprintf("%.2f MB", val/MB)
+	case val >= KB:
+		return fmt.Sprintf("%.2f KB", val/KB)
+	default:
+		return fmt.Sprintf("%d B", value)
+	}
 }
 
 func getFieldEnum(name string) (pb.GetConfigField, bool) {
@@ -313,4 +637,12 @@ func buildSetValue(field, value string) (*pb.SetConfigValue, bool) {
 	default:
 		return nil, false
 	}
+}
+
+func recalculateAllowedClients(ctx context.Context, client pb.WatchdogClient) {
+	resp, err := client.RecalculateAllowedClients(ctx, &pb.Empty{})
+	if err != nil {
+		fatalRPC("RecalculateAllowedClients", err)
+	}
+	fmt.Printf("[RECALCULATE] accepted=%v message=%s\n", resp.Accepted, resp.Message)
 }

@@ -1,1 +1,5 @@
 /target
+WATCHDOG_WEBAPP_HANDOFF.md
+**/.gocache/
+cmd/ais/bin/
+**/vmlinux.h

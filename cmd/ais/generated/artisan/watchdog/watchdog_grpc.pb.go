@@ -19,12 +19,21 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Watchdog_ListApplications_FullMethodName  = "/artisan.watchdog.Watchdog/ListApplications"
-	Watchdog_GetApplication_FullMethodName    = "/artisan.watchdog.Watchdog/GetApplication"
-	Watchdog_ListBuilds_FullMethodName        = "/artisan.watchdog.Watchdog/ListBuilds"
-	Watchdog_ListVerifications_FullMethodName = "/artisan.watchdog.Watchdog/ListVerifications"
-	Watchdog_GetSystemInfo_FullMethodName     = "/artisan.watchdog.Watchdog/GetSystemInfo"
-	Watchdog_ExecuteCommand_FullMethodName    = "/artisan.watchdog.Watchdog/ExecuteCommand"
+	Watchdog_ListApplications_FullMethodName          = "/artisan.watchdog.Watchdog/ListApplications"
+	Watchdog_GetApplication_FullMethodName            = "/artisan.watchdog.Watchdog/GetApplication"
+	Watchdog_GetCurrentLogs_FullMethodName            = "/artisan.watchdog.Watchdog/GetCurrentLogs"
+	Watchdog_QueryHistoricalLogs_FullMethodName       = "/artisan.watchdog.Watchdog/QueryHistoricalLogs"
+	Watchdog_ListBuilds_FullMethodName                = "/artisan.watchdog.Watchdog/ListBuilds"
+	Watchdog_ListVerifications_FullMethodName         = "/artisan.watchdog.Watchdog/ListVerifications"
+	Watchdog_GetSystemInfo_FullMethodName             = "/artisan.watchdog.Watchdog/GetSystemInfo"
+	Watchdog_GetSecurityTripStatus_FullMethodName     = "/artisan.watchdog.Watchdog/GetSecurityTripStatus"
+	Watchdog_GetVersionInfo_FullMethodName            = "/artisan.watchdog.Watchdog/GetVersionInfo"
+	Watchdog_ExecuteCommand_FullMethodName            = "/artisan.watchdog.Watchdog/ExecuteCommand"
+	Watchdog_QueryUsage_FullMethodName                = "/artisan.watchdog.Watchdog/QueryUsage"
+	Watchdog_ListExpectedApps_FullMethodName          = "/artisan.watchdog.Watchdog/ListExpectedApps"
+	Watchdog_GetConfigFile_FullMethodName             = "/artisan.watchdog.Watchdog/GetConfigFile"
+	Watchdog_SetConfigFile_FullMethodName             = "/artisan.watchdog.Watchdog/SetConfigFile"
+	Watchdog_RecalculateAllowedClients_FullMethodName = "/artisan.watchdog.Watchdog/RecalculateAllowedClients"
 )
 
 // WatchdogClient is the client API for Watchdog service.
@@ -33,10 +42,19 @@ const (
 type WatchdogClient interface {
 	ListApplications(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ApplicationStatusList, error)
 	GetApplication(ctx context.Context, in *ApplicationStatusRequest, opts ...grpc.CallOption) (*ApplicationStatusResponse, error)
+	GetCurrentLogs(ctx context.Context, in *CurrentLogsRequest, opts ...grpc.CallOption) (*CurrentLogsResponse, error)
+	QueryHistoricalLogs(ctx context.Context, in *HistoricalLogsRequest, opts ...grpc.CallOption) (*HistoricalLogsResponse, error)
 	ListBuilds(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*BuildStatusList, error)
 	ListVerifications(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*VerificationEntryList, error)
 	GetSystemInfo(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*SystemInfo, error)
+	GetSecurityTripStatus(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*SecurityTripStatus, error)
+	GetVersionInfo(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*VersionInfo, error)
 	ExecuteCommand(ctx context.Context, in *CommandRequest, opts ...grpc.CallOption) (*CommandResponse, error)
+	QueryUsage(ctx context.Context, in *UsageQueryRequest, opts ...grpc.CallOption) (*UsageQueryResponse, error)
+	ListExpectedApps(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ExpectedAppsList, error)
+	GetConfigFile(ctx context.Context, in *GetConfigFileRequest, opts ...grpc.CallOption) (*GetConfigFileResponse, error)
+	SetConfigFile(ctx context.Context, in *SetConfigFileRequest, opts ...grpc.CallOption) (*SetConfigFileResponse, error)
+	RecalculateAllowedClients(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*CommandResponse, error)
 }
 
 type watchdogClient struct {
@@ -61,6 +79,26 @@ func (c *watchdogClient) GetApplication(ctx context.Context, in *ApplicationStat
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ApplicationStatusResponse)
 	err := c.cc.Invoke(ctx, Watchdog_GetApplication_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *watchdogClient) GetCurrentLogs(ctx context.Context, in *CurrentLogsRequest, opts ...grpc.CallOption) (*CurrentLogsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CurrentLogsResponse)
+	err := c.cc.Invoke(ctx, Watchdog_GetCurrentLogs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *watchdogClient) QueryHistoricalLogs(ctx context.Context, in *HistoricalLogsRequest, opts ...grpc.CallOption) (*HistoricalLogsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HistoricalLogsResponse)
+	err := c.cc.Invoke(ctx, Watchdog_QueryHistoricalLogs_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -97,10 +135,80 @@ func (c *watchdogClient) GetSystemInfo(ctx context.Context, in *Empty, opts ...g
 	return out, nil
 }
 
+func (c *watchdogClient) GetSecurityTripStatus(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*SecurityTripStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SecurityTripStatus)
+	err := c.cc.Invoke(ctx, Watchdog_GetSecurityTripStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *watchdogClient) GetVersionInfo(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*VersionInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VersionInfo)
+	err := c.cc.Invoke(ctx, Watchdog_GetVersionInfo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *watchdogClient) ExecuteCommand(ctx context.Context, in *CommandRequest, opts ...grpc.CallOption) (*CommandResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CommandResponse)
 	err := c.cc.Invoke(ctx, Watchdog_ExecuteCommand_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *watchdogClient) QueryUsage(ctx context.Context, in *UsageQueryRequest, opts ...grpc.CallOption) (*UsageQueryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UsageQueryResponse)
+	err := c.cc.Invoke(ctx, Watchdog_QueryUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *watchdogClient) ListExpectedApps(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ExpectedAppsList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExpectedAppsList)
+	err := c.cc.Invoke(ctx, Watchdog_ListExpectedApps_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *watchdogClient) GetConfigFile(ctx context.Context, in *GetConfigFileRequest, opts ...grpc.CallOption) (*GetConfigFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetConfigFileResponse)
+	err := c.cc.Invoke(ctx, Watchdog_GetConfigFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *watchdogClient) SetConfigFile(ctx context.Context, in *SetConfigFileRequest, opts ...grpc.CallOption) (*SetConfigFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetConfigFileResponse)
+	err := c.cc.Invoke(ctx, Watchdog_SetConfigFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *watchdogClient) RecalculateAllowedClients(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*CommandResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CommandResponse)
+	err := c.cc.Invoke(ctx, Watchdog_RecalculateAllowedClients_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -113,10 +221,19 @@ func (c *watchdogClient) ExecuteCommand(ctx context.Context, in *CommandRequest,
 type WatchdogServer interface {
 	ListApplications(context.Context, *Empty) (*ApplicationStatusList, error)
 	GetApplication(context.Context, *ApplicationStatusRequest) (*ApplicationStatusResponse, error)
+	GetCurrentLogs(context.Context, *CurrentLogsRequest) (*CurrentLogsResponse, error)
+	QueryHistoricalLogs(context.Context, *HistoricalLogsRequest) (*HistoricalLogsResponse, error)
 	ListBuilds(context.Context, *Empty) (*BuildStatusList, error)
 	ListVerifications(context.Context, *Empty) (*VerificationEntryList, error)
 	GetSystemInfo(context.Context, *Empty) (*SystemInfo, error)
+	GetSecurityTripStatus(context.Context, *Empty) (*SecurityTripStatus, error)
+	GetVersionInfo(context.Context, *Empty) (*VersionInfo, error)
 	ExecuteCommand(context.Context, *CommandRequest) (*CommandResponse, error)
+	QueryUsage(context.Context, *UsageQueryRequest) (*UsageQueryResponse, error)
+	ListExpectedApps(context.Context, *Empty) (*ExpectedAppsList, error)
+	GetConfigFile(context.Context, *GetConfigFileRequest) (*GetConfigFileResponse, error)
+	SetConfigFile(context.Context, *SetConfigFileRequest) (*SetConfigFileResponse, error)
+	RecalculateAllowedClients(context.Context, *Empty) (*CommandResponse, error)
 	mustEmbedUnimplementedWatchdogServer()
 }
 
@@ -133,6 +250,12 @@ func (UnimplementedWatchdogServer) ListApplications(context.Context, *Empty) (*A
 func (UnimplementedWatchdogServer) GetApplication(context.Context, *ApplicationStatusRequest) (*ApplicationStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetApplication not implemented")
 }
+func (UnimplementedWatchdogServer) GetCurrentLogs(context.Context, *CurrentLogsRequest) (*CurrentLogsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCurrentLogs not implemented")
+}
+func (UnimplementedWatchdogServer) QueryHistoricalLogs(context.Context, *HistoricalLogsRequest) (*HistoricalLogsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method QueryHistoricalLogs not implemented")
+}
 func (UnimplementedWatchdogServer) ListBuilds(context.Context, *Empty) (*BuildStatusList, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListBuilds not implemented")
 }
@@ -142,8 +265,29 @@ func (UnimplementedWatchdogServer) ListVerifications(context.Context, *Empty) (*
 func (UnimplementedWatchdogServer) GetSystemInfo(context.Context, *Empty) (*SystemInfo, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetSystemInfo not implemented")
 }
+func (UnimplementedWatchdogServer) GetSecurityTripStatus(context.Context, *Empty) (*SecurityTripStatus, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetSecurityTripStatus not implemented")
+}
+func (UnimplementedWatchdogServer) GetVersionInfo(context.Context, *Empty) (*VersionInfo, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetVersionInfo not implemented")
+}
 func (UnimplementedWatchdogServer) ExecuteCommand(context.Context, *CommandRequest) (*CommandResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ExecuteCommand not implemented")
+}
+func (UnimplementedWatchdogServer) QueryUsage(context.Context, *UsageQueryRequest) (*UsageQueryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method QueryUsage not implemented")
+}
+func (UnimplementedWatchdogServer) ListExpectedApps(context.Context, *Empty) (*ExpectedAppsList, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListExpectedApps not implemented")
+}
+func (UnimplementedWatchdogServer) GetConfigFile(context.Context, *GetConfigFileRequest) (*GetConfigFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetConfigFile not implemented")
+}
+func (UnimplementedWatchdogServer) SetConfigFile(context.Context, *SetConfigFileRequest) (*SetConfigFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetConfigFile not implemented")
+}
+func (UnimplementedWatchdogServer) RecalculateAllowedClients(context.Context, *Empty) (*CommandResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RecalculateAllowedClients not implemented")
 }
 func (UnimplementedWatchdogServer) mustEmbedUnimplementedWatchdogServer() {}
 func (UnimplementedWatchdogServer) testEmbeddedByValue()                  {}
@@ -202,6 +346,42 @@ func _Watchdog_GetApplication_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Watchdog_GetCurrentLogs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CurrentLogsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).GetCurrentLogs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_GetCurrentLogs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).GetCurrentLogs(ctx, req.(*CurrentLogsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Watchdog_QueryHistoricalLogs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HistoricalLogsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).QueryHistoricalLogs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_QueryHistoricalLogs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).QueryHistoricalLogs(ctx, req.(*HistoricalLogsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Watchdog_ListBuilds_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Empty)
 	if err := dec(in); err != nil {
@@ -256,6 +436,42 @@ func _Watchdog_GetSystemInfo_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Watchdog_GetSecurityTripStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).GetSecurityTripStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_GetSecurityTripStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).GetSecurityTripStatus(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Watchdog_GetVersionInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).GetVersionInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_GetVersionInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).GetVersionInfo(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Watchdog_ExecuteCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CommandRequest)
 	if err := dec(in); err != nil {
@@ -270,6 +486,96 @@ func _Watchdog_ExecuteCommand_Handler(srv interface{}, ctx context.Context, dec 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WatchdogServer).ExecuteCommand(ctx, req.(*CommandRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Watchdog_QueryUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UsageQueryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).QueryUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_QueryUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).QueryUsage(ctx, req.(*UsageQueryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Watchdog_ListExpectedApps_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).ListExpectedApps(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_ListExpectedApps_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).ListExpectedApps(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Watchdog_GetConfigFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetConfigFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).GetConfigFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_GetConfigFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).GetConfigFile(ctx, req.(*GetConfigFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Watchdog_SetConfigFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetConfigFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).SetConfigFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_SetConfigFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).SetConfigFile(ctx, req.(*SetConfigFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Watchdog_RecalculateAllowedClients_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WatchdogServer).RecalculateAllowedClients(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Watchdog_RecalculateAllowedClients_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WatchdogServer).RecalculateAllowedClients(ctx, req.(*Empty))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -290,6 +596,14 @@ var Watchdog_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Watchdog_GetApplication_Handler,
 		},
 		{
+			MethodName: "GetCurrentLogs",
+			Handler:    _Watchdog_GetCurrentLogs_Handler,
+		},
+		{
+			MethodName: "QueryHistoricalLogs",
+			Handler:    _Watchdog_QueryHistoricalLogs_Handler,
+		},
+		{
 			MethodName: "ListBuilds",
 			Handler:    _Watchdog_ListBuilds_Handler,
 		},
@@ -302,8 +616,36 @@ var Watchdog_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Watchdog_GetSystemInfo_Handler,
 		},
 		{
+			MethodName: "GetSecurityTripStatus",
+			Handler:    _Watchdog_GetSecurityTripStatus_Handler,
+		},
+		{
+			MethodName: "GetVersionInfo",
+			Handler:    _Watchdog_GetVersionInfo_Handler,
+		},
+		{
 			MethodName: "ExecuteCommand",
 			Handler:    _Watchdog_ExecuteCommand_Handler,
+		},
+		{
+			MethodName: "QueryUsage",
+			Handler:    _Watchdog_QueryUsage_Handler,
+		},
+		{
+			MethodName: "ListExpectedApps",
+			Handler:    _Watchdog_ListExpectedApps_Handler,
+		},
+		{
+			MethodName: "GetConfigFile",
+			Handler:    _Watchdog_GetConfigFile_Handler,
+		},
+		{
+			MethodName: "SetConfigFile",
+			Handler:    _Watchdog_SetConfigFile_Handler,
+		},
+		{
+			MethodName: "RecalculateAllowedClients",
+			Handler:    _Watchdog_RecalculateAllowedClients_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -18,7 +18,7 @@ SHELL := /bin/bash
 # ---- Paths / names ----
 MODULE          := ais
 BIN             := ais
-MAIN            := ./main.go
+MAIN            := .
 
 PROTO_DIR       := proto
 PROTO_FILE      := $(PROTO_DIR)/watchdog.proto
@@ -73,6 +73,12 @@ build:
 run: build
 	@echo ">> running ./$(BIN) $(ARGS)"
 	./$(BIN) $(ARGS)
+
+# ---- Install Binary ----
+.PHONY: install
+install: build
+	@echo ">> installing $(BIN)"
+	install -m 0755 ./$(BIN) /usr/bin/ais
 
 # ---- Go mod tidy (optional) ----
 .PHONY: tidy

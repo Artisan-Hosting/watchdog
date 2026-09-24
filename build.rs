@@ -1,11 +1,134 @@
-use std::{env, path::PathBuf, process::Command};
+//! Build script for protobuf generation, version export, and eBPF object build.
 
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+/// Build-script entrypoint.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::configure().compile_protos(&["proto/watchdog.proto"], &["proto"])?;
+    println!("cargo:rerun-if-changed=proto/watchdog.proto");
+    println!("cargo:rerun-if-changed=proto/secret.proto");
+    tonic_prost_build::configure()
+        .compile_protos(&["proto/watchdog.proto", "../ais_proto/secret.proto"], &["proto", "../ais_proto"])?;
+    configure_version_env_vars()?;
     build_ebpf()?;
     Ok(())
 }
 
+/// Resolves and exports dependency version metadata for runtime reporting.
+fn configure_version_env_vars() -> Result<(), Box<dyn std::error::Error>> {
+    println!("cargo:rerun-if-changed=Cargo.lock");
+    println!("cargo:rerun-if-changed=Cargo.toml");
+
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let lock_path = manifest_dir.join("Cargo.lock");
+    let toml_path = manifest_dir.join("Cargo.toml");
+
+    if let Ok(lock_content) = fs::read_to_string(&lock_path) {
+        if let Some(version) = extract_lockfile_package_version(&lock_content, "artisan_middleware")
+        {
+            println!("cargo:rustc-env=ARTISAN_MIDDLEWARE_VERSION={version}");
+            return Ok(());
+        }
+    }
+
+    if let Ok(toml_content) = fs::read_to_string(&toml_path) {
+        if let Some(version) = extract_toml_dependency_version(&toml_content, "artisan_middleware")
+        {
+            println!("cargo:rustc-env=ARTISAN_MIDDLEWARE_VERSION={version}");
+            return Ok(());
+        }
+    }
+
+    println!("cargo:warning=Unable to resolve artisan_middleware version; using unknown");
+    println!("cargo:rustc-env=ARTISAN_MIDDLEWARE_VERSION=unknown");
+    Ok(())
+}
+
+/// Extracts `version` for a package from Cargo.lock package sections.
+fn extract_lockfile_package_version(content: &str, package_name: &str) -> Option<String> {
+    let mut current_name: Option<String> = None;
+    let mut current_version: Option<String> = None;
+    let mut in_package = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[[package]]" {
+            if current_name.as_deref() == Some(package_name) {
+                return current_version;
+            }
+            current_name = None;
+            current_version = None;
+            in_package = true;
+            continue;
+        }
+
+        if !in_package || trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(value) = parse_toml_assignment(trimmed, "name") {
+            current_name = Some(value.to_string());
+            continue;
+        }
+        if let Some(value) = parse_toml_assignment(trimmed, "version") {
+            current_version = Some(value.to_string());
+        }
+    }
+
+    if current_name.as_deref() == Some(package_name) {
+        return current_version;
+    }
+    None
+}
+
+/// Extracts a dependency version from Cargo.toml dependency lines.
+fn extract_toml_dependency_version(content: &str, dependency_name: &str) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with(dependency_name) {
+            continue;
+        }
+        let (name, rhs) = trimmed.split_once('=')?;
+        if name.trim() != dependency_name {
+            continue;
+        }
+        let rhs = rhs.trim();
+        if rhs.starts_with('"') {
+            return parse_quoted(rhs).map(ToString::to_string);
+        }
+        if rhs.starts_with('{') {
+            if let Some(version_field_index) = rhs.find("version") {
+                let version_segment = &rhs[version_field_index..];
+                if let Some((_, value)) = version_segment.split_once('=') {
+                    return parse_quoted(value.trim()).map(ToString::to_string);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Parses a TOML `key = "value"` assignment and returns the value.
+fn parse_toml_assignment<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let (lhs, rhs) = line.split_once('=')?;
+    if lhs.trim() != key {
+        return None;
+    }
+    parse_quoted(rhs.trim())
+}
+
+/// Parses a quoted string value from TOML snippets.
+fn parse_quoted(input: &str) -> Option<&str> {
+    let trimmed = input.trim();
+    let rest = trimmed.strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
+/// Compiles and wires the eBPF object when target platform supports it.
 fn build_ebpf() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rustc-check-cfg=cfg(ebpf_supported)");
     println!("cargo:rerun-if-changed=src/ebpf/network.c");
@@ -20,6 +143,14 @@ fn build_ebpf() -> Result<(), Box<dyn std::error::Error>> {
             "cargo:warning=Skipping eBPF build for target {target_arch}-{target_os}; using dummy tracker"
         );
         return Ok(());
+    }
+
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let header_path = manifest_dir.join("src/ebpf/vmlinux.h");
+    if let Err(err) = refresh_vmlinux_header(&header_path) {
+        println!(
+            "cargo:warning=Unable to refresh vmlinux.h from host BTF data: {err}; using existing header"
+        );
     }
 
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
@@ -64,5 +195,34 @@ fn build_ebpf() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    Ok(())
+}
+
+/// Regenerates `vmlinux.h` from host BTF data via `bpftool`.
+fn refresh_vmlinux_header(header_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new("bpftool")
+        .args([
+            "btf",
+            "dump",
+            "file",
+            "/sys/kernel/btf/vmlinux",
+            "format",
+            "c",
+        ])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "bpftool exited with status {}",
+            output
+                .status
+                .code()
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "signal".to_string())
+        )
+        .into());
+    }
+
+    fs::write(header_path, output.stdout)?;
     Ok(())
 }

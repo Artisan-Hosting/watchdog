@@ -1,3 +1,5 @@
+//! Build/deploy logic for client runner binaries.
+
 use std::{fs, path::Path};
 
 use artisan_middleware::dusa_collection_utils::core::errors::Errors;
@@ -16,24 +18,28 @@ use super::build::{
     cargo_path, copy_artifact, prepare_directories, run_command, run_command_with_env,
 };
 
+/// Builds and deploys a client runner binary from the shared runner source tree.
 pub fn build_runner_binary(runner_name: &str) -> ScriptResult<()> {
-    if runner_name.is_empty() {
-        return Err(new_error(
-            Errors::GeneralError,
-            "Runner name cannot be empty",
-        ));
-    }
+    '_validate_inputs: {
+        if runner_name.is_empty() {
+            return Err(new_error(
+                Errors::GeneralError,
+                "Runner name cannot be empty",
+            ));
+        }
 
-    let src_dir = Path::new(AIS_RUNNER_SRC_DIR);
-    if !src_dir.is_dir() {
-        return Err(new_error(
-            Errors::NotFound,
-            format!(
-                "Runner source directory does not exist: {}",
-                src_dir.display()
-            ),
-        ));
+        let src_dir = Path::new(AIS_RUNNER_SRC_DIR);
+        if !src_dir.is_dir() {
+            return Err(new_error(
+                Errors::NotFound,
+                format!(
+                    "Runner source directory does not exist: {}",
+                    src_dir.display()
+                ),
+            ));
+        }
     }
+    let src_dir = Path::new(AIS_RUNNER_SRC_DIR);
 
     prepare_directories()?;
 
@@ -184,6 +190,7 @@ pub fn build_runner_binary(runner_name: &str) -> ScriptResult<()> {
     }
 }
 
+/// Rewrites the runner crate name in `Cargo.toml` before compilation.
 fn rewrite_crate_name(path: &Path, new_name: &str) -> ScriptResult<String> {
     let original = fs::read_to_string(path)
         .map_err(|err| io_error(format!("Unable to read {}", path.display()), err))?;
@@ -226,6 +233,7 @@ fn rewrite_crate_name(path: &Path, new_name: &str) -> ScriptResult<String> {
     Ok(original)
 }
 
+/// Restores the original runner `Cargo.toml` content after build attempts.
 fn revert_crate_name(path: &Path, original: &str, build_log: &Path) -> ScriptResult<()> {
     append_line(
         build_log,

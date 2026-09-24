@@ -1,3 +1,5 @@
+//! Shared constants, identifiers, and state/store types for watchdog runtime.
+
 use std::{collections::HashMap, net::Ipv4Addr, sync::Arc};
 
 use artisan_middleware::{
@@ -18,7 +20,11 @@ use tokio::sync::RwLock;
 use crate::functions::get_all_ipv4;
 
 /// Base directory housing all Artisan applications.
-pub const ARTISAN_APPS_DIR: &str = "/opt/artisan/apps";
+pub const ARTISAN_APPS_DIR: &str = "/opt/artisan/src";
+/// Base config directory housing all Artisan applications.
+pub const ARTISAN_CONF_DIR: &str = "/opt/artisan/etc";
+/// Base temp directory housing all Artisan applications.
+pub const ARTISAN_TMP_DIR: &str = "/opt/artisan/tmp";
 /// Directory where built binaries are deployed.
 pub const ARTISAN_BIN_DIR: &str = "/opt/artisan/bin";
 /// Directory storing vetted build artifacts.
@@ -34,13 +40,20 @@ pub const CARGO_ROOT_BIN: &str = "/root/.cargo/bin/cargo";
 pub const CARGO_SYSTEM_BIN: &str = "cargo";
 
 /// Path to the ledger file expected on every host.
-pub const LEDGER_PATH: &str = "/opt/artisan/ledger.json";
+pub const LEDGER_PATH: &str = "/opt/artisan/usage/ledger.db";
+/// Directory where archived usage ledgers are stored.
+pub const LEDGER_ARCHIVE_DIR: &str = "/opt/artisan/usage";
 /// Path to the git credential file required during verification.
-pub const GIT_CONFIG_PATH: &str = "/opt/artisan/git.cf";
+pub const GIT_CONFIG_PATH: &str = "/opt/artisan/etc/git.cf";
 /// Path to the main build helper script shipped with the platform.
 pub const BUILD_SCRIPT_PATH: &str = "/opt/artisan/scripts/build.sh";
 /// Path to the runner build helper script shipped with the platform.
 pub const BUILD_RUNNER_SCRIPT_PATH: &str = "/opt/artisan/scripts/build_runner.sh";
+
+/// Uid of the `www-data` account client applications run as.
+pub const WWW_DATA_UID: u32 = 33;
+/// Gid of the `www-data` account client applications run as.
+pub const WWW_DATA_GID: u32 = 33;
 
 /// Prefix applied to AIS application crates and binaries.
 pub const AIS_PREFIX: &str = "ais_";
@@ -54,10 +67,10 @@ pub const APP_MAILLER: &str = "mailler";
 pub const APP_WELCOME: &str = "welcome";
 
 /// Path to the AIS runner source tree.
-pub const AIS_RUNNER_SRC_DIR: &str = "/opt/artisan/apps/ais_runner";
+pub const AIS_RUNNER_SRC_DIR: &str = "/opt/artisan/src/ais_runner";
 
 /// String prefix used when constructing build log file names.
-pub const BUILD_LOG_PREFIX: &str = "build";
+pub const BUILD_LOG_PREFIX: &str = "build_";
 
 /// Git branch that watchdog pulls during automated builds.
 pub const RELEASE_BRANCH: &str = "release";
@@ -66,11 +79,22 @@ pub const RELEASE_BRANCH: &str = "release";
 pub const VETTED_LATEST_SUFFIX: &str = "_latest";
 
 /// Maximum number of stdout/stderr entries we retain per application.
-pub const APPLICATION_STD_BUFFER_SIZE: usize = 500;
+pub const APPLICATION_STD_BUFFER_SIZE: usize = 1000;
 /// Filesystem path to the watchdog gRPC Unix domain socket.
 pub const WATCHDOG_SOCKET_PATH: &str = "/tmp/artisan_watchdog.sock";
 /// Location where we persist encrypted PID ledgers for crash recovery.
-pub const WATCHDOG_PID_LEDGER_PATH: &str = "/tmp/.artisan_watchdog_pids";
+pub const WATCHDOG_PID_LEDGER_PATH: &str = "/opt/artisan/tmp/.artisan_watchdog_pids";
+/// Marker file written by kernel/userland trip reporting path.
+pub const WATCHDOG_TAMPER_FLAG_PATH: &str = "/opt/artisan/log/.ais_tamper";
+/// Audit log where watchdog records consumed tamper markers.
+pub const WATCHDOG_SECURITY_AUDIT_LOG_PATH: &str = "/opt/artisan/log/security_trip_audit.log";
+/// Encrypted startup/shutdown file-integrity manifest path.
+pub const WATCHDOG_INTEGRITY_MANIFEST_PATH: &str = "/opt/artisan/tmp/.watchdog_integrity_manifest";
+/// Environment flag used to disable startup integrity enforcement for testing.
+pub const WATCHDOG_IGNORE_INTEGRITY_ENV: &str = "AIS_WATCHDOG_IGNORE_HASHES";
+/// Directory roots included in startup/shutdown integrity hashing.
+pub const WATCHDOG_INTEGRITY_ROOTS: [&str; 3] =
+    [ARTISAN_VETTED_DIR, ARTISAN_BIN_DIR, "/opt/artisan/etc"];
 
 /// Canonical list of files that must be present for watchdog to proceed.
 pub const CORE_VERIFICATION_PATHS: [&str; 2] = [LEDGER_PATH, GIT_CONFIG_PATH];
@@ -104,10 +128,11 @@ impl ApplicationIdentifiers {
 }
 
 /// Critical application definitions, including both canonical and AIS-qualified identifiers.
-pub const CRITICAL_APPLICATIONS: [ApplicationIdentifiers; 3] = [
+pub const CRITICAL_APPLICATIONS: [ApplicationIdentifiers; 2] = [
     ApplicationIdentifiers::new(APP_MANAGER, AIS_MANAGER),
     ApplicationIdentifiers::new(APP_GITMON, AIS_GITMON),
-    ApplicationIdentifiers::new(APP_MAILLER, AIS_MAILLER),
+    // ApplicationIdentifiers::new(APP_MAILLER, AIS_MAILLER), 
+    // ^ Finnally dropping this, we could add a apostle dep here to let the system send emails, and maybe add a grpc contract item to let apps ask the watchdog to send emails
     // ApplicationIdentifiers::new(APP_WELCOME, AIS_WELCOME),
 ];
 
@@ -216,6 +241,20 @@ pub type VerificationStatusStore = Arc<RwLock<Vec<VerificationEntry>>>;
 pub type SystemInformationStore = Arc<RwLock<ArtisanSystemInformation>>;
 pub type ChildProcessArray = Arc<LockWithTimeout<HashMap<String, SupervisedProcesses>>>;
 
+#[derive(Debug, Clone, Default)]
+pub struct ClientInventorySnapshot {
+    /// All clients present in git credentials (e.g. `ais_<git_id>`), regardless of config state.
+    pub expected_clients: Vec<String>,
+    /// Clients considered safe to build/spawn because they have valid TOML config in `ARTISAN_CONF_DIR`.
+    pub safe_clients: Vec<String>,
+    /// Last time the inventory scan ran (epoch seconds).
+    pub last_scan: u64,
+    /// Last build attempt time (epoch seconds) per client application.
+    pub last_build_attempt: HashMap<String, u64>,
+}
+
+pub type ClientInventoryStore = Arc<RwLock<ClientInventorySnapshot>>;
+
 pub fn new_application_status_store() -> ApplicationStatusStore {
     Arc::new(RwLock::new(HashMap::new()))
 }
@@ -244,6 +283,10 @@ pub fn new_system_information_store() -> SystemInformationStore {
 
 pub fn new_child_process_array() -> ChildProcessArray {
     Arc::new(LockWithTimeout::new(HashMap::new()))
+}
+
+pub fn new_client_inventory_store() -> ClientInventoryStore {
+    Arc::new(RwLock::new(ClientInventorySnapshot::default()))
 }
 
 pub fn rolling_buffer_from_entries(entries: Vec<(u64, String)>) -> RollingBuffer {
@@ -303,6 +346,9 @@ pub struct ArtisanSystemInformation {
     pub system_apps_initialized: bool, // Only true if all services are running
     pub ip_addrs: Vec<Ipv4Addr>,       // every ip v4 on the system exept docker and localhost ips
     pub manager_linked: bool, // The manager will ping us when it starts indicating we're all the way online
+    pub security_tripped: bool,
+    pub security_trip_detected_at: u64,
+    pub security_trip_summary: String,
 }
 
 impl ArtisanSystemInformation {
@@ -322,10 +368,23 @@ impl Default for ArtisanSystemInformation {
         };
 
         Self {
-            identity: Identifier::load_from_file().unwrap().into(),
+            identity: match Identifier::load_from_file() {
+                Ok(identity) => Some(identity),
+                Err(err) => {
+                    log!(
+                        LogLevel::Warn,
+                        "Failed to load identity file during system info init: {}",
+                        err
+                    );
+                    None
+                }
+            },
             system_apps_initialized: true,
             ip_addrs: ips,
             manager_linked: false,
+            security_tripped: false,
+            security_trip_detected_at: 0,
+            security_trip_summary: "clear".to_string(),
         }
     }
 }

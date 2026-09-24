@@ -1,0 +1,24 @@
+Ais status 
+
+App: ais_18da5793
+Status: Unknown
+CPU: 5.31%
+Mem: 216.43 MB
+Net RX: 2484000 B
+Net TX: 251041500 B
+
+
+Siege result 
+
+Transactions:		    12000    hits
+Availability:		      100.00 %
+Elapsed time:		      104.71 secs
+Data transferred:	      235.03 MB
+Response time:		      129.20 ms
+Transaction rate:	      114.60 trans/sec
+Throughput:		        2.24 MB/sec
+Concurrency:		       14.81
+Successful transactions:    12000
+Failed transactions:	        0
+Longest transaction:	     1220.00 ms
+Shortest transaction:	       40.00 ms

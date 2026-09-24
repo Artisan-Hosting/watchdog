@@ -10,6 +10,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     os::fd::AsRawFd,
     process, thread,
+    sync::mpsc,
     time::{Duration, Instant, SystemTime},
 };
 
@@ -25,13 +26,16 @@ use artisan_middleware::{
 };
 use byteorder::{LittleEndian, WriteBytesExt};
 use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use nix::{ioctl_none, ioctl_write_ptr, unistd};
+use once_cell::sync::OnceCell;
 use prost::Message;
 use sha2::Sha256;
 use std::convert::TryFrom;
 use std::str::FromStr;
+#[cfg(target_os = "linux")]
 use tss_esapi::tcti_ldr::DeviceConfig;
+#[cfg(target_os = "linux")]
 use tss_esapi::{
     Context, TctiNameConf,
     handles::{NvIndexHandle, NvIndexTpmHandle},
@@ -47,6 +51,19 @@ const AWDOG_KEY_LEN: usize = 32;
 const AWDOG_MAC_LEN: usize = 32;
 /// Fixed UUID that uniquely identifies the watchdog client to the kernel.
 const AWDOG_MODULE_UUID: [u8; 16] = *b"AWDOGMOD-UUIDv10";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeartbeatFaultMode {
+    None,
+    BadMac,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeartbeatCommand {
+    SetFaultMode(HeartbeatFaultMode),
+}
+
+static HEARTBEAT_COMMAND_TX: OnceCell<mpsc::Sender<HeartbeatCommand>> = OnceCell::new();
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -89,9 +106,10 @@ ioctl_none!(awdog_ioctl_unreg, AWDOG_IOC_MAGIC, AWDOG_IOCTL_UNREG_NR);
 /// a background thread that periodically emits authenticated heartbeats. Any
 /// errors encountered while registering are surfaced to the caller so they can
 /// be logged by the application bootstrap code.
+#[cfg(target_os = "linux")]
 pub fn start_kernel_watchdog() -> Result<(), ErrorArrayItem> {
     let root_k = unseal_root_k_from_tpm()?;
-    let kc = hkdf_derive_kc(&root_k, &AWDOG_MODULE_UUID);
+    let kc = hkdf_derive_kc(&root_k, &AWDOG_MODULE_UUID)?;
 
     let file = OpenOptions::new()
         .read(true)
@@ -134,12 +152,23 @@ pub fn start_kernel_watchdog() -> Result<(), ErrorArrayItem> {
     let hb_period = Duration::from_millis(reg.hb_period_ms as u64);
     let hb_key = reg.key;
 
+    let (hb_tx, hb_rx) = mpsc::channel::<HeartbeatCommand>();
+    let _ = HEARTBEAT_COMMAND_TX.set(hb_tx);
+
     thread::Builder::new()
         .name("awdog-heartbeat".into())
-        .spawn(move || run_heartbeat_loop(file, hb_key, pid, exe_fp, hb_period))
+        .spawn(move || run_heartbeat_loop(file, hb_key, pid, exe_fp, hb_period, hb_rx))
         .map_err(ErrorArrayItem::from)?;
 
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn start_kernel_watchdog() -> Result<(), ErrorArrayItem> {
+    Err(ErrorArrayItem::new(
+        Errors::GeneralError,
+        "Kernel watchdog is only supported on Linux targets",
+    ))
 }
 
 /// Continuously emit heartbeats to the kernel watchdog module until an error
@@ -150,12 +179,43 @@ fn run_heartbeat_loop(
     pid: u32,
     exe_fp: u64,
     period: Duration,
+    cmd_rx: mpsc::Receiver<HeartbeatCommand>,
 ) {
     let mut nonce: u64 = 1;
     let mut last_send: Option<Instant> = None;
+    let mut next_send: Instant = Instant::now();
+    let mut fault_mode = HeartbeatFaultMode::None;
 
     loop {
-        let hb = build_hb(&kc, nonce, pid, exe_fp);
+        let now = Instant::now();
+        let timeout = next_send.saturating_duration_since(now);
+        match cmd_rx.recv_timeout(timeout) {
+            Ok(HeartbeatCommand::SetFaultMode(mode)) => {
+                fault_mode = mode;
+                // Switch immediately; don't wait for the normal cadence.
+                next_send = Instant::now();
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {}
+        }
+
+        let mut hb = match build_hb(&kc, nonce, pid, exe_fp) {
+            Ok(hb) => hb,
+            Err(err) => {
+                log!(
+                    LogLevel::Error,
+                    "Failed to build watchdog heartbeat; stopping heartbeat loop: {}",
+                    err.err_mesg
+                );
+                return;
+            }
+        };
+        if fault_mode == HeartbeatFaultMode::BadMac {
+            // Intentionally corrupt the MAC so the kernel module rejects the heartbeat
+            // and trips with reason=verify-failed.
+            hb.mac[0] ^= 0xFF;
+        }
         let hb_bytes = unsafe {
             std::slice::from_raw_parts(
                 (&hb as *const AwdogHb) as *const u8,
@@ -195,7 +255,7 @@ fn run_heartbeat_loop(
         }
 
         nonce = nonce.wrapping_add(1);
-        thread::sleep(period);
+        next_send = Instant::now() + period;
     }
 
     unsafe {
@@ -209,18 +269,49 @@ fn run_heartbeat_loop(
     }
 }
 
+/// Requests that the kernel watchdog client intentionally send malformed heartbeats.
+///
+/// This is intended as a controlled "trip" path: the kernel module will reject the
+/// heartbeat and initiate its reboot flow (typically reason=verify-failed).
+pub fn request_intentional_trip() -> Result<(), ErrorArrayItem> {
+    let tx = HEARTBEAT_COMMAND_TX.get().ok_or_else(|| {
+        ErrorArrayItem::new(
+            Errors::GeneralError,
+            "Kernel watchdog heartbeat thread is not running".to_string(),
+        )
+    })?;
+
+    tx.send(HeartbeatCommand::SetFaultMode(HeartbeatFaultMode::BadMac))
+        .map_err(|err| {
+            ErrorArrayItem::new(
+                Errors::GeneralError,
+                format!("Failed to signal kernel watchdog trip mode: {err}"),
+            )
+        })?;
+
+    Ok(())
+}
+
 /// HKDF helper that derives the per-session key used to authenticate heartbeats.
-fn hkdf_derive_kc(root_k: &[u8; AWDOG_KEY_LEN], module_uuid: &[u8; 16]) -> [u8; AWDOG_KEY_LEN] {
+fn hkdf_derive_kc(
+    root_k: &[u8; AWDOG_KEY_LEN],
+    module_uuid: &[u8; 16],
+) -> Result<[u8; AWDOG_KEY_LEN], ErrorArrayItem> {
     let hk = Hkdf::<Sha256>::new(None, root_k);
     let mut okm = [0u8; AWDOG_KEY_LEN];
     let mut info = b"artisan-watchdog v1".to_vec();
     info.extend_from_slice(module_uuid);
-    hk.expand(&info, &mut okm)
-        .expect("hkdf expand should not fail with fixed output size");
-    okm
+    hk.expand(&info, &mut okm).map_err(|err| {
+        ErrorArrayItem::new(
+            Errors::GeneralError,
+            format!("Failed to derive kernel watchdog session key: {err}"),
+        )
+    })?;
+    Ok(okm)
 }
 
 /// Retrieve the watchdog root key from the TPM NV index defined in `tpm_plan.md`.
+#[cfg(target_os = "linux")]
 fn unseal_root_k_from_tpm() -> Result<[u8; AWDOG_KEY_LEN], ErrorArrayItem> {
     const ROOT_NV_INDEX: u32 = 0x0150_0020; // see tpm_plan.md for provisioning details
 
@@ -325,31 +416,61 @@ fn now_ns() -> u64 {
 }
 
 /// Compute an HMAC over the heartbeat payload using the kernel-provided key.
-fn hmac_mac(kc: &[u8; AWDOG_KEY_LEN], hb_no_mac: &[u8]) -> [u8; AWDOG_MAC_LEN] {
-    let mut mac = <Hmac<Sha256>>::new_from_slice(kc).unwrap();
+fn hmac_mac(kc: &[u8; AWDOG_KEY_LEN], hb_no_mac: &[u8]) -> Result<[u8; AWDOG_MAC_LEN], ErrorArrayItem> {
+    let mut mac = <Hmac<Sha256>>::new_from_slice(kc).map_err(|err| {
+        ErrorArrayItem::new(
+            Errors::GeneralError,
+            format!("Failed to initialize watchdog HMAC: {err}"),
+        )
+    })?;
     mac.update(hb_no_mac);
     let out = mac.finalize().into_bytes();
     let mut mac_bytes = [0u8; AWDOG_MAC_LEN];
     mac_bytes.copy_from_slice(&out);
-    mac_bytes
+    Ok(mac_bytes)
 }
 
 /// Construct a heartbeat message that can be sent directly to the kernel module.
-fn build_hb(kc: &[u8; AWDOG_KEY_LEN], nonce: u64, pid: u32, exe_fp: u64) -> AwdogHb {
+fn build_hb(
+    kc: &[u8; AWDOG_KEY_LEN],
+    nonce: u64,
+    pid: u32,
+    exe_fp: u64,
+) -> Result<AwdogHb, ErrorArrayItem> {
     let ts_ns = now_ns();
     let mut aad = Vec::with_capacity(8 + 4 + 8 + 8);
-    aad.write_u64::<LittleEndian>(nonce).unwrap();
-    aad.write_u32::<LittleEndian>(pid).unwrap();
-    aad.write_u64::<LittleEndian>(exe_fp).unwrap();
-    aad.write_u64::<LittleEndian>(ts_ns).unwrap();
+    aad.write_u64::<LittleEndian>(nonce).map_err(|err| {
+        ErrorArrayItem::new(
+            Errors::GeneralError,
+            format!("Failed to encode watchdog heartbeat nonce: {err}"),
+        )
+    })?;
+    aad.write_u32::<LittleEndian>(pid).map_err(|err| {
+        ErrorArrayItem::new(
+            Errors::GeneralError,
+            format!("Failed to encode watchdog heartbeat pid: {err}"),
+        )
+    })?;
+    aad.write_u64::<LittleEndian>(exe_fp).map_err(|err| {
+        ErrorArrayItem::new(
+            Errors::GeneralError,
+            format!("Failed to encode watchdog heartbeat fingerprint: {err}"),
+        )
+    })?;
+    aad.write_u64::<LittleEndian>(ts_ns).map_err(|err| {
+        ErrorArrayItem::new(
+            Errors::GeneralError,
+            format!("Failed to encode watchdog heartbeat timestamp: {err}"),
+        )
+    })?;
 
-    let mac = hmac_mac(kc, &aad);
+    let mac = hmac_mac(kc, &aad)?;
 
-    AwdogHb {
+    Ok(AwdogHb {
         monotonic_nonce: nonce,
         pid,
         exe_fingerprint: exe_fp,
         ts_ns,
         mac,
-    }
+    })
 }

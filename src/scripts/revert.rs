@@ -1,3 +1,5 @@
+//! Vetted-binary fallback deployment helper.
+
 use std::{fs, path::Path};
 
 use artisan_middleware::dusa_collection_utils::core::errors::Errors;
@@ -9,6 +11,7 @@ use crate::definitions::{
 use super::build::prepare_directories;
 use super::{ScriptResult, append_line, io_error, new_error, timestamp_string};
 
+/// Replaces the deployed binary with the latest vetted artifact symlink target.
 pub fn revert_to_vetted(app_name: &str) -> ScriptResult<()> {
     if app_name.is_empty() {
         return Err(new_error(

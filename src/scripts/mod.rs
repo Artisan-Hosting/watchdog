@@ -1,3 +1,5 @@
+//! Async wrappers around synchronous build/deploy script helpers.
+
 use std::{
     fs::OpenOptions,
     io::{self, Write},
@@ -24,6 +26,7 @@ pub use build_runner::build_runner_binary as build_runner_binary_sync;
 pub use clean::clean_cargo_projects as clean_cargo_projects_sync;
 pub use revert::revert_to_vetted as revert_to_vetted_sync;
 
+/// Shared result type used by all script helpers.
 pub type ScriptResult<T> = Result<T, ErrorArrayItem>;
 
 pub(crate) fn new_error(kind: Errors, message: impl Into<String>) -> ErrorArrayItem {
@@ -100,11 +103,13 @@ where
     join_result
 }
 
+/// Builds a system application crate and deploys the resulting binary.
 pub async fn build_application(app_name: &str) -> ScriptResult<()> {
     let name = app_name.to_string();
     run_script_job("build_application", move || build::build_application(&name)).await
 }
 
+/// Builds a client runner binary and deploys the resulting artifact.
 pub async fn build_runner_binary(runner_name: &str) -> ScriptResult<()> {
     let name = runner_name.to_string();
     run_script_job("build_runner_binary", move || {
@@ -113,6 +118,7 @@ pub async fn build_runner_binary(runner_name: &str) -> ScriptResult<()> {
     .await
 }
 
+/// Recursively runs `cargo clean` for all manifests under a system app.
 pub async fn clean_cargo_projects(app_name: &str) -> ScriptResult<()> {
     let name = app_name.to_string();
     run_script_job("clean_cargo_projects", move || {
@@ -121,11 +127,13 @@ pub async fn clean_cargo_projects(app_name: &str) -> ScriptResult<()> {
     .await
 }
 
+/// Reverts a deployed binary to its vetted symlink target.
 pub async fn revert_to_vetted(app_name: &str) -> ScriptResult<()> {
     let name = app_name.to_string();
     run_script_job("revert_to_vetted", move || revert::revert_to_vetted(&name)).await
 }
 
+/// Cleans the shared runner workspace.
 pub async fn clean_runner_workspace() -> ScriptResult<()> {
     use std::path::Path;
     run_script_job("clean_runner_workspace", move || {
