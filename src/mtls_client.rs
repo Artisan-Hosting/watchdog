@@ -38,12 +38,12 @@ pub struct ClientMtls {
 
 impl ClientMtls {
     /// Loads `MTLS_CERT_PATH` / `MTLS_KEY_PATH` / `MTLS_CA_PATH`, defaulting to
-    /// `/etc/artisan/tls/<own_service>.{crt,key}` and `/etc/artisan/tls/ca.crt`
-    /// -- the same variables and layout the servers already use, so a process
-    /// that is both a server and a client (ais_secretserver, RunpodManager)
-    /// reuses one certificate for both directions.
+    /// `/opt/artisan/tls/<own_service>.{crt,key}` and `/opt/artisan/tls/ca.crt`
+    /// -- same variable names the servers use, but this crate's default layout
+    /// lives under `/opt/artisan` alongside the rest of this service's local
+    /// software, not `/etc/artisan`.
     pub fn load(own_service: &str) -> Result<Self, String> {
-        let dir = PathBuf::from("/etc/artisan/tls");
+        let dir = PathBuf::from("/opt/artisan/tls");
         let path = |var: &str, default: PathBuf| {
             std::env::var(var).map(PathBuf::from).unwrap_or(default)
         };
