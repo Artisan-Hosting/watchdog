@@ -1,7 +1,6 @@
 [package]
 name = "ais_watchdog"
-# symbolic bump, just haven't done it in a while
-version = "2.5.2"
+version = "5.0.0"
 edition = "2024"
 
 [dependencies]
