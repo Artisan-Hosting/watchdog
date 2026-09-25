@@ -112,7 +112,24 @@ pub async fn connect_internal(
     endpoint(addr, server_name, mtls)?
         .connect()
         .await
-        .map_err(|e| format!("connecting to {addr}: {e}"))
+        .map_err(|e| format!("connecting to {addr}: {}", describe_error_chain(&e)))
+}
+
+/// `tonic::transport::Error`'s own `Display` is famously terse -- often just
+/// the literal string "transport error" -- with the actual cause (DNS
+/// failure, TLS name mismatch, connection refused, ...) buried one or more
+/// levels down `std::error::Error::source()`. Walking the whole chain here is
+/// the difference between a log line that says nothing and one that says
+/// "tcp connect error: Connection refused (os error 111)".
+fn describe_error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut msg = err.to_string();
+    let mut source = err.source();
+    while let Some(err) = source {
+        msg.push_str(": ");
+        msg.push_str(&err.to_string());
+        source = err.source();
+    }
+    msg
 }
 
 /// Loads this process's service credential -- the bearer secret ais_auth issued
