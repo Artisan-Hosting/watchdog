@@ -204,14 +204,13 @@ impl WatchdogService {
             return true;
         }
 
-        if let Err(err) =
-            functions::refresh_client_inventory_once(&self.client_inventory_store).await
-        {
-            log!(
+        match functions::refresh_client_inventory_once(&self.client_inventory_store).await {
+            Ok(diff) => functions::migrate_newly_safe_apps(&diff).await,
+            Err(err) => log!(
                 LogLevel::Warn,
                 "Inventory refresh failed; checking cached snapshot: {}",
                 err.err_mesg
-            );
+            ),
         }
 
         let snapshot = self.client_inventory_store.read().await;
@@ -502,14 +501,13 @@ impl Watchdog for WatchdogService {
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<ExpectedAppsList>, Status> {
-        if let Err(err) =
-            functions::refresh_client_inventory_once(&self.client_inventory_store).await
-        {
-            log!(
+        match functions::refresh_client_inventory_once(&self.client_inventory_store).await {
+            Ok(diff) => functions::migrate_newly_safe_apps(&diff).await,
+            Err(err) => log!(
                 LogLevel::Warn,
                 "Expected-apps refresh failed; serving cached inventory: {}",
                 err.err_mesg
-            );
+            ),
         }
 
         let snapshot = self.client_inventory_store.read().await;
@@ -547,15 +545,14 @@ impl Watchdog for WatchdogService {
         .map_err(|err| Status::internal(err.err_mesg.to_string()))?;
 
         if read.created {
-            if let Err(err) =
-                functions::refresh_client_inventory_once(&self.client_inventory_store).await
-            {
-                log!(
+            match functions::refresh_client_inventory_once(&self.client_inventory_store).await {
+                Ok(diff) => functions::migrate_newly_safe_apps(&diff).await,
+                Err(err) => log!(
                     LogLevel::Warn,
                     "Inventory refresh failed after scaffolding {}: {}",
                     msg.application,
                     err.err_mesg
-                );
+                ),
             }
         }
 
@@ -598,15 +595,14 @@ impl Watchdog for WatchdogService {
                     result.path.display(),
                     result.backup_file.as_deref().unwrap_or("none")
                 );
-                if let Err(err) =
-                    functions::refresh_client_inventory_once(&self.client_inventory_store).await
-                {
-                    log!(
+                match functions::refresh_client_inventory_once(&self.client_inventory_store).await {
+                    Ok(diff) => functions::migrate_newly_safe_apps(&diff).await,
+                    Err(err) => log!(
                         LogLevel::Warn,
                         "Inventory refresh failed after config write for {}: {}",
                         msg.application,
                         err.err_mesg
-                    );
+                    ),
                 }
 
                 // Bundle env vars are only ever read once, at process spawn
@@ -1000,6 +996,8 @@ impl Watchdog for WatchdogService {
     ) -> Result<Response<CommandResponse>, Status> {
         match functions::refresh_client_inventory_once(&self.client_inventory_store).await {
             Ok(diff) => {
+                functions::migrate_newly_safe_apps(&diff).await;
+
                 let safe_clients = {
                     let guard = self.client_inventory_store.read().await;
                     guard.safe_clients.clone()

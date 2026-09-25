@@ -123,44 +123,7 @@ pub async fn monitor_client_inventory(
         // yet, nothing to sync" over there). Running migration here too,
         // for exactly the apps that just became safe, closes that gap
         // without needing a restart.
-        if !diff.safe_added.is_empty() {
-            match artisan_middleware::identity::Identifier::load_from_file() {
-                Ok(identity) => match crate::secrets::SecretClient::connect().await {
-                    Ok(mut secret_client) => {
-                        for ais_name in &diff.safe_added {
-                            match super::runtime_bundle_lifecycle::migrate_app_to_bundle(
-                                ais_name,
-                                identity.id,
-                                &mut secret_client,
-                            )
-                            .await
-                            {
-                                Ok(true) => {
-                                    log!(LogLevel::Info, "Runtime bundle created for {}", ais_name)
-                                }
-                                Ok(false) => {} // already migrated, nothing to do
-                                Err(err) => log!(
-                                    LogLevel::Warn,
-                                    "Runtime bundle migration failed for {}: {}",
-                                    ais_name,
-                                    err.err_mesg
-                                ),
-                            }
-                        }
-                    }
-                    Err(err) => log!(
-                        LogLevel::Warn,
-                        "Skipping runtime bundle migration for newly-safe apps; secret-server unreachable: {}",
-                        err.err_mesg
-                    ),
-                },
-                Err(err) => log!(
-                    LogLevel::Warn,
-                    "Skipping runtime bundle migration for newly-safe apps; no machine identity yet: {}",
-                    err.err_mesg
-                ),
-            }
-        }
+        migrate_newly_safe_apps(&diff).await;
 
         let safe_clients = {
             let guard = inventory_store.read().await;
@@ -171,10 +134,71 @@ pub async fn monitor_client_inventory(
         auto_build_safe_clients(
             &inventory_store,
             &build_status_store,
-            safe_clients,
+            safe_clients.clone(),
             Duration::from_secs(60),
         )
         .await;
+        retry_missing_bundles(&inventory_store, &safe_clients, Duration::from_secs(60)).await;
+    }
+}
+
+/// Attempts `migrate_app_to_bundle` for every app in `diff.safe_added`.
+///
+/// A "safe" transition is only ever visible once: the moment some caller's
+/// `refresh_client_inventory_once` diffs it in, the in-memory snapshot moves
+/// on and no later scan (this loop's next tick included) will ever see that
+/// same transition again. Several RPC handlers call
+/// `refresh_client_inventory_once` directly and, until this existed, threw
+/// the resulting diff away -- most importantly `get_config_file`'s
+/// scaffold-on-create-if-missing path, which is exactly what a freshly
+/// added-to-this-node app's first config write goes through (see
+/// `Portal::write_watchdog_file`'s scaffold-then-set pattern). That call
+/// would mark the app safe off the placeholder file alone and silently eat
+/// the transition, so the real config write immediately afterward -- and
+/// this loop's next tick -- both saw the app as already safe and never
+/// migrated it: config populated, build succeeds, but no `runtime.acai` ever
+/// gets created, so the app can never actually start. Every caller that
+/// observes a non-empty `safe_added` must route it through here.
+pub async fn migrate_newly_safe_apps(diff: &ClientInventoryDiff) {
+    if diff.safe_added.is_empty() {
+        return;
+    }
+
+    match artisan_middleware::identity::Identifier::load_from_file() {
+        Ok(identity) => match crate::secrets::SecretClient::connect().await {
+            Ok(mut secret_client) => {
+                for ais_name in &diff.safe_added {
+                    match super::runtime_bundle_lifecycle::migrate_app_to_bundle(
+                        ais_name,
+                        identity.id,
+                        &mut secret_client,
+                    )
+                    .await
+                    {
+                        Ok(true) => {
+                            log!(LogLevel::Info, "Runtime bundle created for {}", ais_name)
+                        }
+                        Ok(false) => {} // already migrated, nothing to do
+                        Err(err) => log!(
+                            LogLevel::Warn,
+                            "Runtime bundle migration failed for {}: {}",
+                            ais_name,
+                            err.err_mesg
+                        ),
+                    }
+                }
+            }
+            Err(err) => log!(
+                LogLevel::Warn,
+                "Skipping runtime bundle migration for newly-safe apps; secret-server unreachable: {}",
+                err.err_mesg
+            ),
+        },
+        Err(err) => log!(
+            LogLevel::Warn,
+            "Skipping runtime bundle migration for newly-safe apps; no machine identity yet: {}",
+            err.err_mesg
+        ),
     }
 }
 
@@ -353,6 +377,89 @@ pub async fn auto_build_safe_clients(
                 store.insert(client_name.clone(), status);
             }
         });
+    }
+}
+
+/// Retries `migrate_app_to_bundle` for every safe client still missing a
+/// `runtime.acai`, on the same attempt-then-backoff cadence
+/// `auto_build_safe_clients` already uses for missing binaries.
+///
+/// `migrate_newly_safe_apps` only ever fires once, at the moment an app is
+/// first observed as safe -- if that one shot fails (secret-server
+/// unreachable during a cold-boot race is the case that surfaced this: the
+/// box is pingable, but `SecretClient::connect()` also depends on minting a
+/// session from `ais_auth` and resolving/handshaking TLS to
+/// `secrets.ah.internal`, any of which can still be coming up), the app was
+/// otherwise stuck with no bundle -- and therefore never actually starting,
+/// even though config/build both looked fine -- until another
+/// safe->unsafe->safe toggle or a full watchdog restart. Called every tick
+/// of `monitor_client_inventory`, this makes that recoverable without
+/// either.
+pub async fn retry_missing_bundles(
+    inventory_store: &ClientInventoryStore,
+    safe_clients: &[String],
+    retry_backoff: Duration,
+) {
+    for client in safe_clients {
+        if super::runtime_bundle_lifecycle::bundle_path(client).is_file() {
+            continue;
+        }
+
+        let now = current_timestamp();
+        let should_attempt = {
+            let mut guard = inventory_store.write().await;
+            let last = guard.last_bundle_attempt.get(client).copied().unwrap_or(0);
+            let allowed_at = last.saturating_add(retry_backoff.as_secs());
+            if now < allowed_at {
+                false
+            } else {
+                guard.last_bundle_attempt.insert(client.clone(), now);
+                true
+            }
+        };
+
+        if !should_attempt {
+            continue;
+        }
+
+        match artisan_middleware::identity::Identifier::load_from_file() {
+            Ok(identity) => match crate::secrets::SecretClient::connect().await {
+                Ok(mut secret_client) => {
+                    match super::runtime_bundle_lifecycle::migrate_app_to_bundle(
+                        client,
+                        identity.id,
+                        &mut secret_client,
+                    )
+                    .await
+                    {
+                        Ok(true) => log!(
+                            LogLevel::Info,
+                            "Runtime bundle created for {} (retry)",
+                            client
+                        ),
+                        Ok(false) => {} // created by someone else in the meantime
+                        Err(err) => log!(
+                            LogLevel::Warn,
+                            "Runtime bundle migration retry failed for {}: {}",
+                            client,
+                            err.err_mesg
+                        ),
+                    }
+                }
+                Err(err) => log!(
+                    LogLevel::Warn,
+                    "Runtime bundle migration retry for {} skipped; secret-server unreachable: {}",
+                    client,
+                    err.err_mesg
+                ),
+            },
+            Err(err) => log!(
+                LogLevel::Warn,
+                "Runtime bundle migration retry for {} skipped; no machine identity yet: {}",
+                client,
+                err.err_mesg
+            ),
+        }
     }
 }
 

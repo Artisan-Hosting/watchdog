@@ -251,6 +251,14 @@ pub struct ClientInventorySnapshot {
     pub last_scan: u64,
     /// Last build attempt time (epoch seconds) per client application.
     pub last_build_attempt: HashMap<String, u64>,
+    /// Last runtime-bundle migration attempt time (epoch seconds) per client
+    /// application. A migration attempt otherwise only ever fires once per
+    /// observed "safe" transition (`migrate_newly_safe_apps`) -- if that one
+    /// shot fails (e.g. secret-server unreachable during a cold-boot race),
+    /// the app is stuck with no bundle until another safe->unsafe->safe
+    /// toggle or watchdog restart. This backs the periodic retry in
+    /// `retry_missing_bundles`, mirroring `last_build_attempt`'s pattern.
+    pub last_bundle_attempt: HashMap<String, u64>,
 }
 
 pub type ClientInventoryStore = Arc<RwLock<ClientInventorySnapshot>>;

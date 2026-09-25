@@ -7,8 +7,9 @@ pub mod runtime_bundle_lifecycle;
 pub mod verification;
 
 pub use inventory::{
-    generate_safe_client_runner_list, get_all_ipv4, monitor_client_inventory,
-    refresh_client_inventory_once, seed_placeholder_client_statuses, auto_build_safe_clients,
+    generate_safe_client_runner_list, get_all_ipv4, migrate_newly_safe_apps,
+    monitor_client_inventory, refresh_client_inventory_once, retry_missing_bundles,
+    seed_placeholder_client_statuses, auto_build_safe_clients,
 };
 pub use monitoring::{
     CommandStubResult, ProcessStoreHandle, ProcessStoreKind, configure_client_runtime_command,

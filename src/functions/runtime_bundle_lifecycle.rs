@@ -33,7 +33,7 @@ use crate::secrets::SecretClient;
 /// (`ARTISAN_CONF_DIR/<ais_name>/runtime.acai`).
 pub const BUNDLE_FILE_NAME: &str = "runtime.acai";
 
-fn bundle_path(ais_name: &str) -> PathBuf {
+pub(crate) fn bundle_path(ais_name: &str) -> PathBuf {
     conf_dir().join(ais_name).join(BUNDLE_FILE_NAME)
 }
 
