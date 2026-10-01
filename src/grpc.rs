@@ -1047,6 +1047,7 @@ fn application_status_to_proto(
     name: String,
     status: &ApplicationStatus,
 ) -> ApplicationStatusMessage {
+    let name_for_port = name.clone();
     ApplicationStatusMessage {
         name,
         status: status.status.as_str_name().to_string(),
@@ -1057,6 +1058,10 @@ fn application_status_to_proto(
         stdout: rolling_buffer_to_proto_entries(&status.stdout),
         stderr: rolling_buffer_to_proto_entries(&status.stderr),
         network_usage: status.network_usage.as_ref().map(network_usage_to_proto),
+        port: crate::functions::ports::port_or_zero(
+            std::path::Path::new(crate::definitions::ARTISAN_CONF_DIR),
+            &name_for_port,
+        ),
     }
 }
 

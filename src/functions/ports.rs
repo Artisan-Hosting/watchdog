@@ -67,6 +67,11 @@ fn is_bound(port: u16) -> bool {
     TcpListener::bind(("0.0.0.0", port)).is_err() || TcpListener::bind(("127.0.0.1", port)).is_err()
 }
 
+/// The stored port as the proto reports it: 0 means "this app has none".
+pub fn port_or_zero(conf_dir: &Path, app: &str) -> u32 {
+    read_port(conf_dir, app).map(u32::from).unwrap_or(0)
+}
+
 /// Whether this app's `Config.toml` asks for an automatic port.
 pub fn wants_auto_port(config_toml: &str) -> bool {
     toml::from_str::<toml::Table>(config_toml)
@@ -175,6 +180,15 @@ mod tests {
             fs::write(port_file(&dir, "ais_aaaa1111"), bad).unwrap();
             assert_eq!(read_port(&dir, "ais_aaaa1111"), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_proto_reports_zero_for_an_app_with_no_port() {
+        let dir = conf();
+        app(&dir, "ais_aaaa1111");
+        assert_eq!(port_or_zero(&dir, "ais_aaaa1111"), 0);
+        ensure_port_with(&dir, "ais_aaaa1111", |_| false).unwrap();
+        assert_eq!(port_or_zero(&dir, "ais_aaaa1111"), u32::from(PORT_RANGE_START));
     }
 
     #[test]

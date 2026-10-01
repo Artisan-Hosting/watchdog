@@ -31,6 +31,9 @@ message ApplicationStatusMessage {
   repeated StdLogEntry stdout = 7;
   repeated StdLogEntry stderr = 8;
   NetworkUsageMessage network_usage = 9;
+  // The port the node allocated to this app (it gets it as PORT), or 0 for an
+  // app that has none. This is what a vhost backend {node, port} points at.
+  uint32 port = 10;
 }
 
 message ApplicationStatusRequest {
