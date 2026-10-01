@@ -1000,6 +1000,29 @@ async fn resolve_start_application(
     Ok(None)
 }
 
+/// A start that cannot happen yet because the app's binary has not been built.
+///
+/// This is **not accepted**: reporting `accepted = true` here (as this used to,
+/// behind a "[stub]" prefix) made the Manager and Portal tell the caller the app
+/// had started when nothing was running. The message says why, so a deploy can
+/// wait for the build and try again.
+fn missing_binary_result(application: &str, origin: &str, binary_path: &str) -> CommandStubResult {
+    CommandStubResult::new(
+        false,
+        format!(
+            "{application} was not started: its binary is not built yet ({binary_path} not found in the {origin} registry); the build is pending or failed"
+        ),
+    )
+}
+
+/// The binary exists but the process could not be spawned. Also not accepted.
+fn spawn_failed_result(application: &str, origin: &str, error: &str) -> CommandStubResult {
+    CommandStubResult::new(
+        false,
+        format!("{application} was not started: could not spawn it ({origin} registry): {error}"),
+    )
+}
+
 /// Launches the process using a pre-selected handle/store target.
 async fn start_with_handle(
     application: &str,
@@ -1011,13 +1034,7 @@ async fn start_with_handle(
     let working_dir = PathType::Content(format!("{}/{}", ARTISAN_CONF_DIR, application));
 
     if !binary_path.exists() {
-        return Ok(CommandStubResult::new(
-            true,
-            format!(
-                "[stub] start command located {application} in {origin:?} registry; Failed: {} not found",
-                binary_path
-            ),
-        ));
+        return Ok(missing_binary_result(application, &format!("{origin:?}"), &binary_path.to_string()));
     }
 
     let mut command = Command::new(binary_path);
@@ -1031,6 +1048,17 @@ async fn start_with_handle(
             );
         }
         configure_client_runtime_command(&mut command, run_as_www_data);
+
+        // A customer app gets the port this node allocated for it, as `PORT`
+        // (see `functions::ports`). Only apps that ask for it: an older app that
+        // reads PORT would otherwise be moved off the port its vhost points at.
+        match crate::functions::ports::port_for_start(application) {
+            Ok(Some(port)) => {
+                command.env("PORT", port.to_string());
+            }
+            Ok(None) => {}
+            Err(err) => log!(LogLevel::Warn, "Could not allocate a port for {}: {}", application, err),
+        }
 
         // Phase E, E8: every (re)start of a bundle-consuming client app --
         // manual or automatic recovery, both funnel through here -- gets a
@@ -1111,13 +1139,7 @@ async fn start_with_handle(
         }
         Err(err) => {
             log!(LogLevel::Error, "Failed to spawn: {}: {}", application, err);
-            Ok(CommandStubResult::new(
-                true,
-                format!(
-                    "[stub] start command located {application} in {origin:?} registry; Failed: {}",
-                    err
-                ),
-            ))
+            Ok(spawn_failed_result(application, &format!("{origin:?}"), &err.to_string()))
         }
     }
 }
@@ -1395,5 +1417,25 @@ pub async fn rebuild_application_stub(
                 ))
             }
         };
+    }
+}
+
+#[cfg(test)]
+mod start_result_tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_binary_is_not_accepted_and_says_the_build_is_pending() {
+        let r = missing_binary_result("ais_abc12345", "Client", "/opt/artisan/bin/ais_abc12345");
+        assert!(!r.accepted, "a start that did not happen must not be reported as accepted");
+        assert!(r.message.contains("not built yet") && r.message.contains("ais_abc12345"), "{}", r.message);
+        assert!(!r.message.contains("[stub]"));
+    }
+
+    #[test]
+    fn a_failed_spawn_is_not_accepted_and_carries_the_error() {
+        let r = spawn_failed_result("ais_abc12345", "Client", "permission denied");
+        assert!(!r.accepted);
+        assert!(r.message.contains("permission denied"));
     }
 }

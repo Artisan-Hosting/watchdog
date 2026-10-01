@@ -24,7 +24,8 @@ use artisan_middleware::runtime_bundle;
 use serde::Deserialize;
 
 use crate::functions::config_files::{
-    conf_dir, sha256_hex, validate_ais_name, ConfigFileKind, ConfigFileRead, ConfigFileWrite,
+    conf_dir, project_checkout_path, sha256_hex, validate_ais_name, ConfigFileKind, ConfigFileRead,
+    ConfigFileWrite,
 };
 use crate::functions::inventory::resolve_overrides_path;
 use crate::secrets::SecretClient;
@@ -571,11 +572,11 @@ fn default_fixed_config_table(ais_name: &str) -> toml::value::Table {
     table.insert("interval_seconds".into(), toml::Value::Integer(30));
     table.insert(
         "monitor_path".into(),
-        toml::Value::String(format!("/var/www/ais/{ais_name}")),
+        toml::Value::String(project_checkout_path(ais_name)),
     );
     table.insert(
         "project_path".into(),
-        toml::Value::String(format!("/var/www/ais/{ais_name}")),
+        toml::Value::String(project_checkout_path(ais_name)),
     );
     table.insert("changes_needed".into(), toml::Value::Integer(1));
     table.insert(

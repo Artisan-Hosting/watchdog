@@ -109,8 +109,17 @@ pub async fn build_application(app_name: &str) -> ScriptResult<()> {
     run_script_job("build_application", move || build::build_application(&name)).await
 }
 
+/// Every app's binary is a copy of the shared generic runner, built by rewriting
+/// the crate name in the shared `Cargo.toml` and running `cargo build` in the
+/// shared `target/`. Two of those at once corrupt each other, and a customer
+/// deploying while another deploy is building makes exactly that happen, so
+/// every caller (auto-build, rebuild command, startup rebuild) takes a turn.
+static RUNNER_BUILD_LOCK: once_cell::sync::Lazy<tokio::sync::Mutex<()>> =
+    once_cell::sync::Lazy::new(|| tokio::sync::Mutex::new(()));
+
 /// Builds a client runner binary and deploys the resulting artifact.
 pub async fn build_runner_binary(runner_name: &str) -> ScriptResult<()> {
+    let _one_build_at_a_time = RUNNER_BUILD_LOCK.lock().await;
     let name = runner_name.to_string();
     run_script_job("build_runner_binary", move || {
         build_runner::build_runner_binary(&name)

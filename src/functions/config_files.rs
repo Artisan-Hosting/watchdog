@@ -545,8 +545,20 @@ pub(crate) fn sha256_hex(content: &str) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// Where an app's git checkout actually lives: `/var/www/ais/<id>`, where `<id>`
+/// is the app name without its `ais_` prefix. That is where GitMonitor and the
+/// Manager clone to, so it is the only path a runner's `project_path` /
+/// `monitor_path` can usefully point at. Three different guesses at this were
+/// scattered through the fleet (`/opt/artisan/src/ais_<id>`, `/var/www/ais/ais_<id>`
+/// and this one); the first two never exist, and a runner whose `project_path` is
+/// missing cannot start.
+pub fn project_checkout_path(ais_name: &str) -> String {
+    format!("/var/www/ais/{}", ais_name.strip_prefix(AIS_PREFIX).unwrap_or(ais_name))
+}
+
 /// Placeholder `Config.toml` matching the generic runner's `[app_specific]` schema.
 pub fn placeholder_config_toml(ais_name: &str) -> String {
+    let checkout = project_checkout_path(ais_name);
     format!(
         r#"# Application config for {ais_name}.
 # Consumed by the runner from its working directory ({conf_dir}/{ais_name}).
@@ -555,9 +567,9 @@ pub fn placeholder_config_toml(ais_name: &str) -> String {
 # Seconds between directory scans for changes.
 interval_seconds = 30
 # Directory watched for source changes.
-monitor_path = "/opt/artisan/src/{ais_name}"
+monitor_path = "{checkout}"
 # Root of the checked-out project.
-project_path = "/opt/artisan/src/{ais_name}"
+project_path = "{checkout}"
 # Number of detected changes before a rebuild is triggered.
 changes_needed = 1
 # Subdirectories excluded from change detection.
@@ -596,6 +608,25 @@ credentials_file = "/opt/artisan/etc/git.cf"
 "#,
         ais_name = ais_name,
     )
+}
+
+#[cfg(test)]
+mod checkout_path_tests {
+    use super::*;
+
+    #[test]
+    fn the_checkout_is_under_var_www_ais_without_the_app_prefix() {
+        assert_eq!(project_checkout_path("ais_63c35f4b"), "/var/www/ais/63c35f4b");
+        assert_eq!(project_checkout_path("63c35f4b"), "/var/www/ais/63c35f4b");
+    }
+
+    #[test]
+    fn the_placeholder_config_points_at_the_real_checkout() {
+        let toml = placeholder_config_toml("ais_63c35f4b");
+        assert!(toml.contains(r#"project_path = "/var/www/ais/63c35f4b""#), "{toml}");
+        assert!(toml.contains(r#"monitor_path = "/var/www/ais/63c35f4b""#), "{toml}");
+        assert!(!toml.contains("/opt/artisan/src"), "{toml}");
+    }
 }
 
 #[cfg(test)]
