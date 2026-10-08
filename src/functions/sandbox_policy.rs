@@ -1,5 +1,8 @@
+use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::os::unix::fs::PermissionsExt;
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -14,28 +17,154 @@ pub struct AppPolicy {
     pub tmp_max_mb: u64,
 }
 
-pub fn parse_policy(_s: &str) -> Result<AppPolicy, String> {
-    todo!()
+const RUNTIMES: [&str; 7] = ["node", "static", "python", "go", "rust", "ruby", "custom"];
+
+/// `^ais_[0-9a-f]{8}$` — nothing else. Rejects path traversal and bare paths too.
+fn valid_app(app: &str) -> bool {
+    app.len() == 12 && app.starts_with("ais_") && app[4..].bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+pub fn parse_policy(s: &str) -> Result<AppPolicy, String> {
+    let policy: AppPolicy = toml::from_str(s).map_err(|e| e.to_string())?;
+    if policy.version != 1 {
+        return Err(format!("version must be 1, got {}", policy.version));
+    }
+    if !(128..=16384).contains(&policy.memory_max_mb) {
+        return Err(format!(
+            "memory_max_mb must be in 128..=16384, got {}",
+            policy.memory_max_mb
+        ));
+    }
+    if !(50..=8000).contains(&policy.cpu_max_millicores) {
+        return Err(format!(
+            "cpu_max_millicores must be in 50..=8000, got {}",
+            policy.cpu_max_millicores
+        ));
+    }
+    if !(64..=4096).contains(&policy.pids_max) {
+        return Err(format!(
+            "pids_max must be in 64..=4096, got {}",
+            policy.pids_max
+        ));
+    }
+    if !(16..=2048).contains(&policy.tmp_max_mb) {
+        return Err(format!(
+            "tmp_max_mb must be in 16..=2048, got {}",
+            policy.tmp_max_mb
+        ));
+    }
+    if !RUNTIMES.contains(&policy.runtime.as_str()) {
+        return Err(format!("unknown runtime: {}", policy.runtime));
+    }
+    Ok(policy)
 }
 
 pub fn policy_dir() -> PathBuf {
-    todo!()
+    std::env::var_os("AIS_POLICY_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(crate::definitions::ARTISAN_CONF_DIR).join("policy"))
 }
 
-pub fn read_policy(_app: &str) -> Result<Option<AppPolicy>, String> {
-    todo!()
+fn policy_file(app: &str) -> Result<PathBuf, String> {
+    if !valid_app(app) {
+        return Err(format!("invalid app name: {app}"));
+    }
+    Ok(policy_dir().join(format!("{app}.toml")))
 }
 
-pub fn write_policy(_app: &str, _toml: &str) -> Result<(), String> {
-    todo!()
+pub fn read_policy(app: &str) -> Result<Option<AppPolicy>, String> {
+    let path = policy_file(app)?;
+    let text = match fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    parse_policy(&text).map(Some)
 }
 
-pub fn ensure_uid(_app: &str) -> io::Result<u32> {
-    todo!()
+pub fn write_policy(app: &str, toml: &str) -> Result<(), String> {
+    let policy = parse_policy(toml)?;
+    let path = policy_file(app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        // Enforce 0700 on the directory we just created.
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, toml).map_err(|e| e.to_string())?;
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    // Re-assert mode in case the filesystem did not preserve it across rename.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
-pub fn ensure_uid_in_range(_app: &str, _lo: u32, _hi_inclusive: u32) -> io::Result<u32> {
-    todo!()
+static UID_ALLOCATION: Mutex<()> = Mutex::new(());
+
+const UID_START: u32 = 2_000_000;
+const UID_END: u32 = 2_099_999;
+
+pub fn ensure_uid(app: &str) -> io::Result<u32> {
+    ensure_uid_in_range(app, UID_START, UID_END)
+}
+
+fn uid_file(app: &str) -> Result<PathBuf, String> {
+    if !valid_app(app) {
+        return Err(format!("invalid app name: {app}"));
+    }
+    Ok(policy_dir().join(format!("{app}.uid")))
+}
+
+/// The uids recorded in every `*.uid` file. A missing dir means nothing is allocated yet.
+fn uids_in_use(dir: &Path) -> io::Result<Vec<u32>> {
+    let mut used = Vec::new();
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(used),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(".uid") {
+            continue;
+        }
+        let text = fs::read_to_string(entry.path())?;
+        if let Ok(uid) = text.trim().parse::<u32>() {
+            used.push(uid);
+        }
+    }
+    Ok(used)
+}
+
+pub fn ensure_uid_in_range(app: &str, lo: u32, hi_inclusive: u32) -> io::Result<u32> {
+    if !valid_app(app) {
+        return Err(io::Error::other("invalid app name"));
+    }
+    let _one_at_a_time = UID_ALLOCATION.lock().unwrap_or_else(|e| e.into_inner());
+
+    let dir = policy_dir();
+    let path = uid_file(app).map_err(|e| io::Error::other(e))?;
+
+    if let Some(existing) = fs::read_to_string(&path).ok().and_then(|t| t.trim().parse::<u32>().ok()) {
+        if (lo..=hi_inclusive).contains(&existing) {
+            return Ok(existing);
+        }
+    }
+
+    let used = uids_in_use(&dir)?;
+    let chosen = (lo..=hi_inclusive).find(|u| !used.contains(u)).ok_or_else(|| {
+        io::Error::other("no free uid left in the sandbox range")
+    })?;
+
+    fs::create_dir_all(&dir)?;
+
+    // Written whole, then moved into place, so a crash never leaves half a number.
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, format!("{chosen}\n"))?;
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+    fs::rename(&tmp, &path)?;
+    Ok(chosen)
 }
 
 #[cfg(test)]
