@@ -1,7 +1,40 @@
 use crate::functions::sandbox_policy::AppPolicy;
 
 pub fn sandbox_env(policy: &AppPolicy, port: Option<u16>) -> Vec<(String, String)> {
-    todo!()
+    let mut env: Vec<(String, String)> = vec![
+        ("HOME".to_string(), "/home/app".to_string()),
+        ("USER".to_string(), "app".to_string()),
+        ("LOGNAME".to_string(), "app".to_string()),
+        ("SHELL".to_string(), "/bin/sh".to_string()),
+        ("LANG".to_string(), "C.UTF-8".to_string()),
+        ("LC_ALL".to_string(), "C.UTF-8".to_string()),
+        ("TMPDIR".to_string(), "/tmp".to_string()),
+        ("AIS_SANDBOX".to_string(), "1".to_string()),
+        ("AIS_WORKSPACE".to_string(), "/app".to_string()),
+        ("AIS_RUNTIME".to_string(), policy.runtime.clone()),
+    ];
+
+    if let Some(v) = &policy.runtime_version {
+        env.push(("AIS_RUNTIME_VERSION".to_string(), v.clone()));
+    }
+    if let Some(p) = port {
+        env.push(("PORT".to_string(), p.to_string()));
+    }
+
+    let node_minor = match policy.runtime.as_str() {
+        "node" | "static" => match policy.runtime_version.as_deref() {
+            Some("20") => "20",
+            _ => "22",
+        },
+        _ => "",
+    };
+    if !node_minor.is_empty() {
+        env.push(("PATH".to_string(), format!("/opt/runtimes/node/{}/bin:/usr/local/bin:/usr/bin:/bin", node_minor)));
+        env.push(("NODE_ENV".to_string(), "production".to_string()));
+        env.push(("npm_config_cache".to_string(), "/home/app/.npm".to_string()));
+    }
+
+    env
 }
 
 #[cfg(test)]
