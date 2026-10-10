@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::fs;
 use std::io;
 use crate::functions::sandbox_policy::AppPolicy;
 
@@ -11,7 +12,12 @@ pub struct Limits {
 }
 
 pub fn limits_from_policy(policy: &AppPolicy) -> Limits {
-    todo!()
+    Limits {
+        memory_max_bytes: policy.memory_max_mb * 1048576,
+        cpu_quota: policy.cpu_max_millicores * 100,
+        cpu_period: 100000,
+        pids_max: policy.pids_max,
+    }
 }
 
 pub struct AppCgroup {
@@ -20,23 +26,115 @@ pub struct AppCgroup {
 
 impl AppCgroup {
     pub fn create(root: &Path, app: &str) -> io::Result<Self> {
-        todo!()
+        let path = root.join("apps").join(app);
+        match fs::create_dir_all(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(io::Error::new(e.kind(), format!("{}: {}", path.display(), e))),
+        }
+        Ok(AppCgroup { path })
     }
+
+    fn write_file(&self, name: &str, contents: &str) -> io::Result<()> {
+        let p = self.path.join(name);
+        fs::write(&p, contents).map_err(|e| io::Error::new(e.kind(), format!("{}: {}", p.display(), e)))
+    }
+
     pub fn apply_limits(&self, limits: &Limits) -> io::Result<()> {
-        todo!()
+        self.write_file("memory.max", &limits.memory_max_bytes.to_string())?;
+        match self.write_file("memory.swap.max", "0") {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        self.write_file("cpu.max", &format!("{} {}", limits.cpu_quota, limits.cpu_period))?;
+        self.write_file("pids.max", &limits.pids_max.to_string())?;
+        Ok(())
     }
+
     pub fn add_pid(&self, pid: u32) -> io::Result<()> {
-        todo!()
+        self.write_file("cgroup.procs", &pid.to_string())
     }
+
+    fn read_file(&self, name: &str) -> io::Result<String> {
+        let p = self.path.join(name);
+        fs::read_to_string(&p).map_err(|e| io::Error::new(e.kind(), format!("{}: {}", p.display(), e)))
+    }
+
     pub fn stats(&self) -> io::Result<CgStats> {
-        todo!()
+        let memory_current = self.read_file("memory.current")?.trim().parse::<u64>().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}: {}", self.path.display(), e)))?;
+        let memory_max = parse_memory_max(&self.read_file("memory.max")?);
+        let cpu_usage_usec = self.read_file("cpu.stat").ok().and_then(|c| parse_cpu_stat(&c)).unwrap_or(0);
+        let oom_kill_count = self.read_file("memory.events").ok().map(|c| parse_memory_events(&c)).unwrap_or(0);
+        let pids_current = self.read_file("pids.current")?.trim().parse::<u64>().map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}: {}", self.path.display(), e)))?;
+        Ok(CgStats { memory_current, memory_max, cpu_usage_usec, oom_kill_count, pids_current })
     }
+
     pub fn kill(&self) -> io::Result<()> {
-        todo!()
+        if self.write_file("cgroup.kill", "1").is_ok() {
+            return Ok(());
+        }
+        for _ in 0..20 {
+            let procs = match fs::read_to_string(self.path.join("cgroup.procs")) {
+                Ok(s) => s,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(e) => return Err(io::Error::new(e.kind(), format!("{}: {}", self.path.display(), e))),
+            };
+            let pids: Vec<u32> = procs.lines().filter_map(|l| l.trim().parse().ok()).collect();
+            if pids.is_empty() {
+                return Ok(());
+            }
+            for pid in pids {
+                nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), nix::sys::signal::Signal::SIGKILL).ok();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        Ok(())
     }
+
     pub fn remove(&self) -> io::Result<()> {
-        todo!()
+        let mut last_err = None;
+        for _ in 0..20 {
+            match fs::remove_dir(&self.path) {
+                Ok(()) => return Ok(()),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(e) => last_err = Some(io::Error::new(e.kind(), format!("{}: {}", self.path.display(), e))),
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        match last_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
+}
+
+pub fn parse_cpu_stat(content: &str) -> Option<u64> {
+    for line in content.lines() {
+        let mut parts = line.split_whitespace();
+        if parts.next() == Some("usage_usec") {
+            return parts.next().and_then(|v| v.parse::<u64>().ok());
+        }
+    }
+    None
+}
+
+pub fn parse_memory_events(content: &str) -> u64 {
+    for line in content.lines() {
+        let mut parts = line.split_whitespace();
+        if parts.next() == Some("oom_kill") {
+            return parts.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+        }
+    }
+    0
+}
+
+pub fn parse_memory_max(content: &str) -> u64 {
+    let trimmed = content.trim();
+    if trimmed == "max" {
+        return u64::MAX;
+    }
+    trimmed.parse::<u64>().unwrap_or(0)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,17 +146,6 @@ pub struct CgStats {
     pub pids_current: u64,
 }
 
-pub fn parse_cpu_stat(content: &str) -> Option<u64> {
-    todo!()
-}
-
-pub fn parse_memory_events(content: &str) -> u64 {
-    todo!()
-}
-
-pub fn parse_memory_max(content: &str) -> u64 {
-    todo!()
-}
 
 #[cfg(test)]
 #[allow(unused_imports)]
