@@ -155,3 +155,192 @@ mod derived_tests {
         // case path_suffix_present_node_18 end
     }
 }
+
+#[cfg(test)]
+#[allow(unused_imports)]
+mod derived_0 {
+    use super::*;
+
+
+
+            // case 2 begin
+            #[test]
+            fn case_2() {
+                let policy = crate::functions::sandbox_policy::AppPolicy {
+                    version: 1,
+                    sandbox: true,
+                    runtime: "python".to_string(),
+                    runtime_version: None,
+                    memory_max_mb: 1024,
+                    cpu_max_millicores: 1000,
+                    pids_max: 100,
+                    tmp_max_mb: 100,
+                };
+                let env = sandbox_env(&policy, None);
+                assert!(env.contains(&("PATH".to_string(), "/app/current/.venv/bin:/usr/local/bin:/usr/bin:/bin".to_string())), "PATH mismatch");
+                assert!(env.contains(&("PIP_CACHE_DIR".to_string(), "/home/app/.cache/pip".to_string())), "PIP_CACHE_DIR mismatch");
+                assert!(env.contains(&("PYTHONUNBUFFERED".to_string(), "1".to_string())), "PYTHONUNBUFFERED mismatch");
+            }
+            // case 2 end
+
+
+    // case 4 begin
+    #[test]
+    fn case_4() {
+        use crate::functions::sandbox_policy::AppPolicy;
+        let policy = AppPolicy {
+            version: 1,
+            sandbox: true,
+            runtime: "go".to_string(),
+            runtime_version: None,
+            memory_max_mb: 1024,
+            cpu_max_millicores: 1000,
+            pids_max: 100,
+            tmp_max_mb: 100,
+        };
+        let env = sandbox_env(&policy, None);
+        assert!(env.contains(&("PATH".to_string(), "/opt/runtimes/go/bin:/usr/local/bin:/usr/bin:/bin".to_string())), "PATH mismatch");
+        assert!(env.contains(&("GOPATH".to_string(), "/home/app/go".to_string())), "GOPATH mismatch");
+        assert!(env.contains(&("GOCACHE".to_string(), "/home/app/.cache/go-build".to_string())), "GOCACHE mismatch");
+        assert!(env.contains(&("GOTOOLCHAIN".to_string(), "auto".to_string())), "GOTOOLCHAIN mismatch");
+        assert!(env.contains(&("CGO_ENABLED".to_string(), "0".to_string())), "CGO_ENABLED mismatch");
+    }
+    // case 4 end
+
+            // case 5 begin
+            #[test]
+            fn case_5() {
+                use crate::functions::sandbox_policy::AppPolicy;
+                let policy = AppPolicy {
+                    version: 1,
+                    sandbox: true,
+                    runtime: "rust".to_string(),
+                    runtime_version: None,
+                    memory_max_mb: 1024,
+                    cpu_max_millicores: 1000,
+                    pids_max: 100,
+                    tmp_max_mb: 100,
+                };
+                let env = sandbox_env(&policy, None);
+                assert!(env.contains(&("PATH".to_string(), "/opt/runtimes/cargo/bin:/opt/runtimes/node/22/bin:/usr/local/bin:/usr/bin:/bin".to_string())), "PATH mismatch");
+                assert!(env.contains(&("CARGO_HOME".to_string(), "/home/app/.cargo".to_string())), "CARGO_HOME mismatch");
+                assert!(env.contains(&("CARGO_TARGET_DIR".to_string(), "/app/target".to_string())), "CARGO_TARGET_DIR mismatch");
+            }
+            // case 5 end
+
+
+            // case 10 begin
+            #[test]
+            fn case_10() {
+                let policy = crate::functions::sandbox_policy::AppPolicy {
+                    version: 1,
+                    sandbox: true,
+                    runtime: "rust".to_string(),
+                    runtime_version: None,
+                    memory_max_mb: 1024,
+                    cpu_max_millicores: 1000,
+                    pids_max: 100,
+                    tmp_max_mb: 100,
+                };
+                let env = sandbox_env(&policy, None);
+                let path = env.iter().find(|(k, _)| k == "PATH").expect("PATH not found").1.clone();
+                assert!(path.ends_with(":/usr/local/bin:/usr/bin:/bin"), "PATH suffix mismatch: {}", path);
+            }
+            // case 10 end
+
+
+            // case 12 begin
+            #[test]
+            fn case_12() {
+                let policy = crate::functions::sandbox_policy::AppPolicy {
+                    version: 1,
+                    sandbox: true,
+                    runtime: "custom".to_string(),
+                    runtime_version: None,
+                    memory_max_mb: 1024,
+                    cpu_max_millicores: 1000,
+                    pids_max: 100,
+                    tmp_max_mb: 100,
+                };
+                let env = sandbox_env(&policy, None);
+                let path = env.iter().find(|(k, _)| k == "PATH").expect("PATH not found").1.clone();
+                assert!(path.ends_with(":/usr/local/bin:/usr/bin:/bin"), "PATH suffix mismatch: {}", path);
+            }
+            // case 12 end
+
+
+
+
+            // case 22 begin
+            #[test]
+            fn case_22() {
+                let policy = crate::functions::sandbox_policy::AppPolicy {
+                    version: 1,
+                    sandbox: true,
+                    runtime: "rust".to_string(),
+                    runtime_version: None,
+                    memory_max_mb: 1024,
+                    cpu_max_millicores: 1000,
+                    pids_max: 100,
+                    tmp_max_mb: 100,
+                };
+                let env = sandbox_env(&policy, None);
+                assert!(env.contains(&("PATH".to_string(), "/opt/runtimes/cargo/bin:/opt/runtimes/node/22/bin:/usr/local/bin:/usr/bin:/bin".to_string())), "PATH mismatch");
+            }
+            // case 22 end
+
+            // case 23 begin
+            #[test]
+            fn case_23() {
+                let policy = crate::functions::sandbox_policy::AppPolicy {
+                    version: 1,
+                    sandbox: true,
+                    runtime: "ruby".to_string(),
+                    runtime_version: None,
+                    memory_max_mb: 1024,
+                    cpu_max_millicores: 1000,
+                    pids_max: 100,
+                    tmp_max_mb: 100,
+                };
+                let env = sandbox_env(&policy, None);
+                assert!(env.contains(&("PATH".to_string(), "/usr/bin:/opt/runtimes/node/22/bin:/usr/local/bin:/usr/bin:/bin".to_string())), "PATH mismatch");
+            }
+            // case 23 end
+
+            // case 24 begin
+            #[test]
+            fn case_24() {
+                let policy = crate::functions::sandbox_policy::AppPolicy {
+                    version: 1,
+                    sandbox: true,
+                    runtime: "custom".to_string(),
+                    runtime_version: None,
+                    memory_max_mb: 1024,
+                    cpu_max_millicores: 1000,
+                    pids_max: 100,
+                    tmp_max_mb: 100,
+                };
+                let env = sandbox_env(&policy, None);
+                assert!(env.contains(&("PATH".to_string(), "/opt/runtimes/node/22/bin:/usr/local/bin:/usr/bin:/bin".to_string())), "PATH mismatch");
+            }
+            // case 24 end
+}
+
+#[cfg(test)]
+#[allow(unused_imports)]
+mod derived_t1_a1_python_base_vars {
+    use super::*;
+
+
+
+
+
+
+}
+
+#[cfg(test)]
+#[allow(unused_imports)]
+mod derived_t2_a3_2 {
+    use super::*;
+
+}
