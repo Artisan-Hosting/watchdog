@@ -21,17 +21,65 @@ pub fn sandbox_env(policy: &AppPolicy, port: Option<u16>) -> Vec<(String, String
         env.push(("PORT".to_string(), p.to_string()));
     }
 
-    let node_minor = match policy.runtime.as_str() {
-        "node" | "static" => match policy.runtime_version.as_deref() {
+    // PATH prefix from C9, then the common suffix. Node/static use a versioned
+    // node bin dir (default 22); any other runtime has its own prefix.
+    let path_prefix = match policy.runtime.as_str() {
+        "node" | "static" => format!("/opt/runtimes/node/{}/bin", match policy.runtime_version.as_deref() {
             Some("20") => "20",
             _ => "22",
-        },
-        _ => "",
+        }),
+        "python" => "/app/current/.venv/bin".to_string(),
+        "go" => "/opt/runtimes/go/bin".to_string(),
+        "rust" => "/opt/runtimes/cargo/bin".to_string(),
+        "ruby" => "/usr/bin".to_string(),
+        "custom" => String::new(),
+        other => format!("/opt/runtimes/{other}/bin"),
     };
-    if !node_minor.is_empty() {
-        env.push(("PATH".to_string(), format!("/opt/runtimes/node/{}/bin:/usr/local/bin:/usr/bin:/bin", node_minor)));
-        env.push(("NODE_ENV".to_string(), "production".to_string()));
-        env.push(("npm_config_cache".to_string(), "/home/app/.npm".to_string()));
+
+    // Node 22 is added to PATH for mixed repos on these runtimes, after the
+    // runtime prefix but before the common suffix.
+    let node_extra = match policy.runtime.as_str() {
+        "rust" | "ruby" | "custom" => Some("/opt/runtimes/node/22/bin".to_string()),
+        _ => None,
+    };
+
+    let mut path_parts: Vec<String> = vec![];
+    if !path_prefix.is_empty() {
+        path_parts.push(path_prefix);
+    }
+    if let Some(node) = node_extra {
+        path_parts.push(node);
+    }
+    let path = format!(
+        "{}:/usr/local/bin:/usr/bin:/bin",
+        path_parts.join(":")
+    );
+    env.push(("PATH".to_string(), path));
+
+    match policy.runtime.as_str() {
+        "node" | "static" => {
+            env.push(("NODE_ENV".to_string(), "production".to_string()));
+            env.push(("npm_config_cache".to_string(), "/home/app/.npm".to_string()));
+        }
+        "python" => {
+            env.push(("PIP_CACHE_DIR".to_string(), "/home/app/.cache/pip".to_string()));
+            env.push(("PYTHONUNBUFFERED".to_string(), "1".to_string()));
+        }
+        "go" => {
+            env.push(("GOPATH".to_string(), "/home/app/go".to_string()));
+            env.push(("GOCACHE".to_string(), "/home/app/.cache/go-build".to_string()));
+            env.push(("GOTOOLCHAIN".to_string(), "auto".to_string()));
+            env.push(("CGO_ENABLED".to_string(), "0".to_string()));
+        }
+        "rust" => {
+            env.push(("CARGO_HOME".to_string(), "/home/app/.cargo".to_string()));
+            env.push(("CARGO_TARGET_DIR".to_string(), "/app/target".to_string()));
+        }
+        "ruby" => {
+            env.push(("BUNDLE_PATH".to_string(), "/app/vendor/bundle".to_string()));
+            env.push(("GEM_HOME".to_string(), "/home/app/.gem".to_string()));
+        }
+        _ => {}
     }
 
     env
